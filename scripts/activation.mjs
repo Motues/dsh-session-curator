@@ -115,7 +115,7 @@ function assertFetchRoute(route) {
 	if (new Set(route.methods).size !== route.methods.length) throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} repeats a method`);
 }
 
-const ENDPOINTS = ["snapshot", "archive", "unarchive", "pin", "unpin", "trash", "restore", "purge"];
+const ENDPOINTS = ["snapshot", "archive", "unarchive", "pin", "unpin", "trash", "restore", "purge", "check-update"];
 const CHANNEL = "/api";
 const PREFIX = "session-curator";
 const ROUTE_PREFIX = `${CHANNEL}/${PREFIX}`;

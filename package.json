@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-curator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness plugin: soft-delete sessions to a recoverable trash and manage archived/pinned ones, grouped by their original workspace folder. | DSH 插件：会话软删除到可恢复的回收站，并按原来的工作区文件夹管理已归档 / 已置顶会话。",
   "type": "module",
   "main": "lib/index.js",

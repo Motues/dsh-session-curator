@@ -1,5 +1,6 @@
-# 开发笔记 / 待办：不进 git、也不进 npm 包（`package.json` 的 files 是白名单）
+# 开发笔记 / 待办 / 项目细节：不进 git、也不进 npm 包（`package.json` 的 files 是白名单）
 TODO.md
+AGENTS.md
 
 # 打包产物
 *.tgz

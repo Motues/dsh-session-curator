@@ -24,6 +24,17 @@ globalThis.window = {
 		}
 	}
 };
+/** 内存版 localStorage：设置持久化走的就是它（浏览器里是 window.localStorage）。 */
+const fakeStorage = new Map();
+globalThis.localStorage = {
+	getItem: (key) => (fakeStorage.has(key) ? fakeStorage.get(key) : null),
+	setItem: (key, value) => {
+		fakeStorage.set(key, String(value));
+	},
+	removeItem: (key) => {
+		fakeStorage.delete(key);
+	}
+};
 
 // ── 迷你 React：够跑一次挂载 + 若干次重渲染 ──────────────────────────────
 const runtime = { index: 0, values: [], callbacks: [], records: [], pending: [], dirty: false };
@@ -103,6 +114,8 @@ const PRIMITIVE_NAMES = [
 	"Menu",
 	"MenuItemButton",
 	"Modal",
+	"SegmentedControl",
+	"Switch",
 	"IconChevronDownOutlineRegular",
 	"IconChevronRightOutlineRegular",
 	"IconEllipsisOutlineRegular",
@@ -243,6 +256,7 @@ check("the ⋯ trigger is dimmed like the sidebar's row actions", rowMenuElement
 // ── B. 整块面板：假 ctx 调 apply()，拿到真正注册的面板组件后渲染 ─────────
 const SNAPSHOT = {
 	dshHome: "C:\\Users\\Motues\\.dsh",
+	version: "0.1.0",
 	trashDir: "C:\\Users\\Motues\\.dsh\\storages\\session-manager\\trash",
 	sessionsDir: "C:\\Users\\Motues\\.dsh\\sessions",
 	archived: [
@@ -258,12 +272,18 @@ const SNAPSHOT = {
 const slots = [];
 let dictionaries = null;
 const hostCalls = [];
+/** 更新检查的假回答；置 null 表示这次让宿主失败（测错误分支）。 */
+let updateResponse = { current: "0.1.0", latest: "0.1.1", outdated: true, checkedAt: 0 };
 const fakeCtx = {
 	get: (name) => (name === "connection"
 		? {
 			rpc: {
 				call: async (channel, endpoint, payload) => {
 					hostCalls.push({ channel, endpoint, payload });
+					if (endpoint.endsWith("check-update")) {
+						if (updateResponse === null) return { ok: false, error: { code: "session-curator/error", message: "registry 不通" } };
+						return { ok: true, value: updateResponse };
+					}
 					return { ok: true, value: SNAPSHOT };
 				}
 			}
@@ -296,6 +316,9 @@ const tPanel = (key, params) => {
 	for (const name of Object.keys(params ?? {})) value = value.split(`{${name}}`).join(String(params[name]));
 	return value;
 };
+
+/** 官方侧边栏的视图存储：预置成"显示已归档"，用来验证配置页那个开关读的是同一份设置。 */
+globalThis.localStorage.setItem("dsh.workspace.view.v5", JSON.stringify({ groupBy: "flat", orderBy: "updated", archivedFilter: "show" }));
 
 let tree = await render(section.component, { t: tPanel });
 const nodesOf = (current, type) => collect(current, []).filter((node) => node.type === type);
@@ -388,6 +411,134 @@ tree = await render(section.component, { t: tPanel });
 check("trash tab groups by the recorded workspace folder too", headers().length === 1 && headers()[0].props.group.title === "BlogPage" && rowsSeen().length === 1, `${headers().length} header(s), ${rowsSeen().length} row(s)`);
 check("trash rows offer restore + permanent delete", menuOfRow("s-9").props.items.map((item) => item.id).join(",") === "restore,purge", menuOfRow("s-9").props.items.map((item) => item.label).join(" · "));
 check("trash rows keep the same single-⋯ shape", draw(rowsSeen()[0]).children[2].children.length === 1);
+
+// ── 配置页：动作在右上、基础设置、版本号与升级提示 ───────────────────────
+// 面板根节点的第 1 个子节点就是顶部条：左边页签组，右边动作组。
+const headerOf = () => tree.children[0];
+const tabBarOf = () => headerOf().children[0];
+const actionsOf = () => headerOf().children[1];
+/** 页签那一组是 `tabs.map(...)` 的结果，迷你渲染器把它当**一个**子节点存着，所以要递归收集。 */
+const tabButtons = () => collect(tabBarOf(), []).filter((node) => node.type === "Button");
+const tabLabels = () => tabButtons().map((node) => node.children[0]).join(" | ");
+const actionButtons = () => (actionsOf() === null ? [] : actionsOf().children.filter(Boolean));
+const switchNodes = () => nodesOf(tree, "Switch");
+/** 按 label（面板传的就是本地化过的名字）找控件，比按下标稳。 */
+const switchByLabel = (label) => switchNodes().find((node) => node.props.label === label);
+const segmentedNodes = () => nodesOf(tree, "SegmentedControl");
+const spanWith = (prefix) => collect(tree, []).find((node) => node.type === "span" && typeof node.children?.[0] === "string" && node.children[0].startsWith(prefix));
+
+check(
+	"the three data tabs stay on the top-left, with 配置 appended",
+	tabButtons().length === 4 && tabLabels() === "已归档 (3) | 已置顶 (1) | 回收站 (1) | 配置",
+	tabLabels()
+);
+check(
+	"分组 and 刷新 moved to the top-right actions group",
+	actionsOf() !== null && actionsOf().props.style.marginInlineStart === "auto" && actionButtons().length === 2
+		&& actionButtons()[0].children[0].startsWith("分组") && actionButtons()[1].children[0] === "刷新",
+	`marginInlineStart=${actionsOf()?.props.style.marginInlineStart} buttons=${actionButtons().map((node) => node.children[0]).join(", ")}`
+);
+check("both right-hand buttons carry a visible border (outline variant)", actionButtons().every((node) => node.props.variant === "outline"), actionButtons().map((node) => node.props.variant).join(", "));
+check("the tab buttons stay in the left group (not among the actions)", tabButtons().every((node) => node.props.variant !== "outline"), tabButtons().map((node) => node.props.variant).join(", "));
+
+// 打开配置页。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check("the config tab drops the list-only actions from the right", headerOf().children[1] === null && tabLabels().endsWith("配置"), tabLabels());
+check("the config page renders 4 switches and 2 segmented controls", switchNodes().length === 4 && segmentedNodes().length === 2, `${switchNodes().length} switch(es), ${segmentedNodes().length} segmented`);
+check(
+	"the default-tab control offers exactly the three data tabs (never 配置 itself)",
+	segmentedNodes()[0].props.options.map((option) => option.value).join(",") === "archived,pinned,trash",
+	segmentedNodes()[0].props.options.map((option) => option.label).join(", ")
+);
+check(
+	"the about block shows the version in small light text",
+	spanWith("版本") !== undefined && spanWith("版本").children[0] === "版本 v0.1.0"
+		&& spanWith("版本").props.style.fontSize === "11px" && spanWith("版本").props.style.color === "var(--dsw-alias-label-tertiary)",
+	spanWith("版本")?.children?.[0]
+);
+check(
+	"an outdated version renders the notice plus the exact upgrade command",
+	JSON.stringify(tree).includes("有新版本 0.1.1（当前 0.1.0）")
+		&& JSON.stringify(tree).includes("升级步骤")
+		&& JSON.stringify(tree).includes("dsh plugin --profile desktop add dsh-session-curator@latest"),
+	String(spanWith("有新版本")?.children?.[0])
+);
+check("opening the config tab really asked the host for updates", hostCalls.some((entry) => entry.endpoint.endsWith("check-update")), hostCalls.map((entry) => entry.endpoint).join(", "));
+
+// ── 侧边栏"显示已归档"：读写的必须是官方那份设置（dsh.workspace.view.v5） ──
+const SIDEBAR_SWITCH = "侧边栏显示已归档会话";
+check(
+	"the sidebar-archived switch mirrors the official setting (seeded to show archived)",
+	switchByLabel(SIDEBAR_SWITCH) !== undefined && switchByLabel(SIDEBAR_SWITCH).props.checked === true,
+	String(switchByLabel(SIDEBAR_SWITCH)?.props.checked)
+);
+check("no refresh hint before the sidebar value is touched", !JSON.stringify(tree).includes("已写入官方设置"));
+
+switchByLabel(SIDEBAR_SWITCH).props.onChange(false);
+tree = await render(section.component, { t: tPanel });
+const sidebarView = JSON.parse(globalThis.localStorage.getItem("dsh.workspace.view.v5"));
+check(
+	"turning it off writes only archivedFilter into the official key",
+	sidebarView.archivedFilter === "default" && sidebarView.groupBy === "flat" && sidebarView.orderBy === "updated",
+	JSON.stringify(sidebarView)
+);
+check(
+	"the plugin's own settings key is not polluted by it",
+	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).archivedFilter === undefined,
+	globalThis.localStorage.getItem("dsh-session-curator.settings")
+);
+check(
+	"a refresh hint appears, because the official store only reads that key when it is created",
+	JSON.stringify(tree).includes("已写入官方设置")
+		&& collect(tree, []).some((node) => node.type === "Button" && node.children?.[0] === "刷新页面"),
+	JSON.stringify(collect(tree, []).filter((node) => node.type === "Button").map((node) => node.children?.[0]))
+);
+
+// 设置真的生效：关掉"行内显示体积与文件数"，回已归档页签看行。
+switchByLabel("行内显示体积与文件数").props.onChange(false);
+tree = await render(section.component, { t: tPanel });
+check(
+	"a switch writes the setting through to localStorage",
+	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).showMeta === false,
+	globalThis.localStorage.getItem("dsh-session-curator.settings")
+);
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+const slimMeta = rowsSeen().map((node) => metaOf(draw(node)));
+check(
+	"showMeta = false drops size and file count from every row",
+	slimMeta.length === 3 && slimMeta.every((meta) => !meta.includes(" B") && !meta.includes("个文件")),
+	JSON.stringify(slimMeta)
+);
+
+// 排序：按体积降序（组内），组间照旧按文件夹名。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+segmentedNodes()[1].props.onChange("bytes");
+tree = await render(section.component, { t: tPanel });
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"order = bytes sorts rows inside each group",
+	rowsSeen().map((node) => node.props.row.sessionId).join(",") === "s-3,s-2,s-1",
+	rowsSeen().map((node) => node.props.row.sessionId).join(",")
+);
+
+// 检查失败：显示原因，不谎报"已是最新"。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+updateResponse = null;
+const recheck = collect(tree, []).find((node) => node.type === "Button" && node.children?.[0] === "检查更新");
+recheck.props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"a failed check shows the reason instead of claiming to be current",
+	JSON.stringify(tree).includes("检查更新失败") && !JSON.stringify(tree).includes("已是最新版本")
+		&& collect(tree, []).some((node) => node.props.style?.color === "var(--dsw-alias-state-error-primary)"),
+	String(spanWith("检查更新失败")?.children?.[0])
+);
+updateResponse = { current: "0.1.0", latest: "0.1.1", outdated: true, checkedAt: 0 };
 
 // ── 设置页 id：导航栏图标是「按 id 查表」的（外壳的 navIcon()） ──────────
 check('with an empty ledger the section borrows the "archived-sessions" id (archive glyph in the nav)', sectionIdWith(() => []) === "archived-sessions");
