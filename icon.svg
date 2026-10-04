@@ -1,0 +1,15 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- dsh-session-curator：一个工作区文件夹 + 里面排好的会话列表。
+       与 DSH 自带插件插画同一套语言：36 网格、纯矢量、渐变填充（#69B9FF → #324DE2）。
+       这是 manifest 图标（被 <img src="data:image/svg+xml;base64,..."> 渲染），
+       所以必须自带着色，不能用 currentColor。 -->
+  <path d="M9 9.6H15.4L19.3 13.2H27A3.4 3.4 0 0 1 30.4 16.6V25A3.4 3.4 0 0 1 27 28.4H9A3.4 3.4 0 0 1 5.6 25V13A3.4 3.4 0 0 1 9 9.6Z" fill="url(#folder)"/>
+  <rect x="11.4" y="17.6" width="13.2" height="2.4" rx="1.2" fill="#FFFFFF" fill-opacity="0.95"/>
+  <rect x="11.4" y="21.6" width="10.4" height="2.4" rx="1.2" fill="#FFFFFF" fill-opacity="0.72"/>
+  <defs>
+    <linearGradient id="folder" x1="18" y1="9.6" x2="18" y2="28.4" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69B9FF"/>
+      <stop offset="1" stop-color="#324DE2"/>
+    </linearGradient>
+  </defs>
+</svg>

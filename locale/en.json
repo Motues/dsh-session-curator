@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session manager",
+    "description": "Soft-delete sessions to a trash and manage archived or pinned ones, grouped by their original workspace folder."
+  }
+}

@@ -1,0 +1,8 @@
+# 开发笔记 / 待办：不进 git、也不进 npm 包（`package.json` 的 files 是白名单）
+TODO.md
+
+# 打包产物
+*.tgz
+
+# 依赖（本插件零依赖，这里只是防止误提交）
+node_modules/
