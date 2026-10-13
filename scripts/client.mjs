@@ -147,6 +147,25 @@ const client = spec.factory(requireStub);
 const { groupRows, groupKeyOf, SessionRow, GroupHeader } = client;
 check("groupRows / groupKeyOf are exported as pure functions", typeof groupRows === "function" && typeof groupKeyOf === "function");
 
+// 折叠决策（`groups.ts`）：默认状态 + 手动覆盖两张表合成一个答案。
+check(
+	"isGroupCollapsed lets untouched folders follow the configured default",
+	client.isGroupCollapsed("archived:k", {}, "collapsed") === true && client.isGroupCollapsed("archived:k", {}, "expanded") === false
+);
+check(
+	"isGroupCollapsed prefers the manual override",
+	client.isGroupCollapsed("archived:k", { "archived:k": false }, "collapsed") === false && client.isGroupCollapsed("archived:k", { "archived:k": true }, "expanded") === true
+);
+check(
+	"toggledCollapse records an override, and drops it again once it matches the default",
+	JSON.stringify(client.toggledCollapse("k", {}, "expanded")) === '{"k":true}'
+		&& JSON.stringify(client.toggledCollapse("k", { k: true }, "expanded")) === "{}"
+		&& JSON.stringify(client.toggledCollapse("k", {}, "collapsed")) === '{"k":false}'
+		&& JSON.stringify(client.toggledCollapse("k", { k: false }, "collapsed")) === "{}",
+	`${JSON.stringify(client.toggledCollapse("k", {}, "expanded"))} / ${JSON.stringify(client.toggledCollapse("k", { k: true }, "expanded"))} / ${JSON.stringify(client.toggledCollapse("k", {}, "collapsed"))}`
+);
+check("collapseKey keeps the state per tab", client.collapseKey("trash", "unknown") === "trash:unknown", client.collapseKey("trash", "unknown"));
+
 const t = (key) => ({
 	noProject: "(unknown)",
 	sessions: "{n} sessions",
@@ -229,6 +248,19 @@ check("the folder icon is dimmer than the title and inherits currentColor", togg
 const headerLabels = toggleChildren.filter((child) => typeof child?.children?.[0] === "string").map((child) => child.children[0]);
 check("group header shows title, count and size", ["Alpha", "2 sessions", "30 B"].every((label) => headerLabels.includes(label)), JSON.stringify(headerLabels));
 check("a fully selected group offers the short clear action on the right", selectButton.type === "Button" && selectButton.children[0] === "Clear" && selectButton.props.title.includes("Alpha"));
+// 长路径回归：右侧动作按钮不参与 flex 收缩、也不许折行；收缩全部由左侧折叠按钮消化
+//（标题 / 路径各有 minWidth: 0 + 省略号）。DSH 的 Button 没有 white-space: nowrap，
+// 一旦被挤窄，中文标签就会在按钮里折成两行。
+check(
+	"the right-hand action button neither shrinks nor wraps its label",
+	selectButton.props.style?.flex === "0 0 auto" && selectButton.props.style?.whiteSpace === "nowrap",
+	JSON.stringify(selectButton.props.style)
+);
+check(
+	"the folder toggle is the flex item that absorbs the shrink (so title/path ellipsize instead)",
+	toggleButton.props.style?.flex === "1 1 auto" && toggleButton.props.style?.minWidth === 0,
+	JSON.stringify({ flex: toggleButton.props.style?.flex, minWidth: toggleButton.props.style?.minWidth })
+);
 toggleButton.props.onClick();
 selectButton.props.onClick();
 check("header click / right-hand button call the handlers", collapses === 1 && groupToggles === 1, `collapse=${collapses} select=${groupToggles}`);
@@ -252,6 +284,7 @@ const rowMenuElement = rowMenuOf(withoutCwd);
 check("the menu is anchored to an icon-only ghost Button carrying the ellipsis icon", rowMenuElement.props.anchor.type === "Button" && rowMenuElement.props.anchor.props.variant === "ghost" && rowMenuElement.props.anchor.props.icon.type === "IconEllipsisOutlineRegular" && rowMenuElement.props.anchor.props.children === undefined, `icon=${rowMenuElement.props.anchor.props.icon?.type}`);
 check("the menu follows the panel's open state and portals itself", rowMenuElement.props.open === true && rowMenuOf(withCwd).props.open === false && rowMenuElement.props.portal === true);
 check("the ⋯ trigger is dimmed like the sidebar's row actions", rowMenuElement.props.anchor.props.style.color === "var(--dsw-alias-label-secondary)" && String(rowMenuElement.props.anchor.props["aria-label"]).includes("More actions"));
+check("the ⋯ trigger keeps its own width when the title is long", rowMenuElement.props.anchor.props.style.flex === "0 0 auto", JSON.stringify(rowMenuElement.props.anchor.props.style));
 
 // ── B. 整块面板：假 ctx 调 apply()，拿到真正注册的面板组件后渲染 ─────────
 const SNAPSHOT = {
@@ -340,6 +373,14 @@ check("every group header renders the chevron, the folder icon and the right-han
 	return toggle[0].children[0].type === "IconChevronDownOutlineRegular" && toggle[1].children[0].type === "IconFolderOpenRegular" && parts[1].type === "Button" && toggle.every((child) => child?.type !== "input");
 }), "");
 check("every folder row paints the faint band", headers().every((node) => draw(node).props.style.background === "var(--dsw-alias-interactive-bg-active)"), "");
+// 长路径回归（面板里也验一遍）：右侧按钮定宽不折行，路径那段自己带省略号。
+check("in the rendered panel every select button stays rigid and every path can ellipsize", headers().every((node) => {
+	const parts = partsOf(node);
+	// 按**文本**找路径那段：标题 span 的 tooltip 也是 cwd，别按 title 找（会先命中标题）。
+	const path = parts[0].children.find((child) => typeof child?.children?.[0] === "string" && child.children[0].includes("\\"));
+	return parts[1].props.style.flex === "0 0 auto" && parts[1].props.style.whiteSpace === "nowrap"
+		&& path !== undefined && path.props.style.minWidth === 0 && path.props.style.textOverflow === "ellipsis";
+}), JSON.stringify(headers().map((node) => partsOf(node)[1].props.style)));
 
 // 折叠 Momo 组：点它的标题按钮 → 该组的行必须消失，但组标题还在。
 partsOf(headers()[1])[0].props.onClick();
@@ -425,6 +466,8 @@ const switchNodes = () => nodesOf(tree, "Switch");
 /** 按 label（面板传的就是本地化过的名字）找控件，比按下标稳。 */
 const switchByLabel = (label) => switchNodes().find((node) => node.props.label === label);
 const segmentedNodes = () => nodesOf(tree, "SegmentedControl");
+/** 按 label 找分段控件（面板传的就是本地化过的名字），比按下标稳。 */
+const segmentedByLabel = (label) => segmentedNodes().find((node) => node.props.label === label);
 const spanWith = (prefix) => collect(tree, []).find((node) => node.type === "span" && typeof node.children?.[0] === "string" && node.children[0].startsWith(prefix));
 
 check(
@@ -445,11 +488,18 @@ check("the tab buttons stay in the left group (not among the actions)", tabButto
 buttonByLabel("配置").props.onClick();
 tree = await render(section.component, { t: tPanel });
 check("the config tab drops the list-only actions from the right", headerOf().children[1] === null && tabLabels().endsWith("配置"), tabLabels());
-check("the config page renders 4 switches and 2 segmented controls", switchNodes().length === 4 && segmentedNodes().length === 2, `${switchNodes().length} switch(es), ${segmentedNodes().length} segmented`);
+check("the config page renders 4 switches and 3 segmented controls", switchNodes().length === 4 && segmentedNodes().length === 3, `${switchNodes().length} switch(es), ${segmentedNodes().length} segmented`);
 check(
 	"the default-tab control offers exactly the three data tabs (never 配置 itself)",
 	segmentedNodes()[0].props.options.map((option) => option.value).join(",") === "archived,pinned,trash",
 	segmentedNodes()[0].props.options.map((option) => option.label).join(", ")
+);
+check(
+	"the folder default-state control offers 展开 / 折叠 and carries the saved value",
+	segmentedByLabel("分组默认状态") !== undefined
+		&& segmentedByLabel("分组默认状态").props.options.map((option) => option.value).join(",") === "expanded,collapsed"
+		&& segmentedByLabel("分组默认状态").props.value === "expanded",
+	String(segmentedByLabel("分组默认状态")?.props.value)
 );
 check(
 	"the about block shows the version in small light text",
@@ -515,7 +565,7 @@ check(
 // 排序：按体积降序（组内），组间照旧按文件夹名。
 buttonByLabel("配置").props.onClick();
 tree = await render(section.component, { t: tPanel });
-segmentedNodes()[1].props.onChange("bytes");
+segmentedByLabel("排序").props.onChange("bytes");
 tree = await render(section.component, { t: tPanel });
 buttonByLabel("已归档").props.onClick();
 tree = await render(section.component, { t: tPanel });
@@ -524,6 +574,78 @@ check(
 	rowsSeen().map((node) => node.props.row.sessionId).join(",") === "s-3,s-2,s-1",
 	rowsSeen().map((node) => node.props.row.sessionId).join(",")
 );
+
+// ── 分组默认折叠 / 展开（配置项 groupDefault） ───────────────────────────
+// 语义：没手动点过的文件夹跟随配置里的默认状态（改配置立即生效）；手动点过的保留手动
+// 状态；手动翻**回**默认值之后重新跟随配置（覆盖被丢掉，见 groups.ts 的 toggledCollapse）。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+segmentedByLabel("分组默认状态").props.onChange("collapsed");
+tree = await render(section.component, { t: tPanel });
+check(
+	"turning the folder default to 折叠 is persisted",
+	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).groupDefault === "collapsed",
+	globalThis.localStorage.getItem("dsh-session-curator.settings")
+);
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"every folder follows the default and starts collapsed",
+	headers().length === 2 && headers().every((node) => node.props.collapsed === true) && rowsSeen().length === 0,
+	`collapsed=${headers().map((node) => node.props.collapsed).join(",")} rows=${rowsSeen().length}`
+);
+// 手动展开 BlogPage（headers()[0]）：只有它变，另一组照旧跟随默认。
+partsOf(headers()[0])[0].props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"expanding one folder by hand leaves the others collapsed",
+	headers()[0].props.collapsed === false && headers()[1].props.collapsed === true
+		&& rowsSeen().map((node) => node.props.row.sessionId).join(",") === "s-3",
+	`collapsed=${headers().map((node) => node.props.collapsed).join(",")} rows=${rowsSeen().map((node) => node.props.row.sessionId).join(",")}`
+);
+// 改回默认"展开"：没手动点过的 Momo 立刻跟着展开，手动展开的 BlogPage 不变。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check("the control carries the saved 折叠 value", segmentedByLabel("分组默认状态").props.value === "collapsed", String(segmentedByLabel("分组默认状态").props.value));
+segmentedByLabel("分组默认状态").props.onChange("expanded");
+tree = await render(section.component, { t: tPanel });
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"changing the default only moves the folders nobody touched by hand",
+	headers().length === 2 && headers().every((node) => node.props.collapsed === false) && rowsSeen().length === 3,
+	`collapsed=${headers().map((node) => node.props.collapsed).join(",")} rows=${rowsSeen().length}`
+);
+// 手动折叠再展开（翻回默认值）→ 这条分组重新跟随配置。
+partsOf(headers()[1])[0].props.onClick();
+tree = await render(section.component, { t: tPanel });
+check("collapsing one folder by hand hides exactly its rows", rowsSeen().length === 1, `${rowsSeen().length} row(s)`);
+partsOf(headers()[1])[0].props.onClick();
+tree = await render(section.component, { t: tPanel });
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+segmentedByLabel("分组默认状态").props.onChange("collapsed");
+tree = await render(section.component, { t: tPanel });
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check(
+	"a folder toggled back to the default follows the setting again",
+	headers()[1].props.collapsed === true,
+	`collapsed=${headers().map((node) => node.props.collapsed).join(",")}`
+);
+check(
+	"a folder still expanded by hand keeps its manual state across a default change",
+	headers()[0].props.collapsed === false && rowsSeen().map((node) => node.props.row.sessionId).join(",") === "s-3",
+	`collapsed=${headers().map((node) => node.props.collapsed).join(",")} rows=${rowsSeen().map((node) => node.props.row.sessionId).join(",")}`
+);
+// 还原成默认展开：后面几条断言依赖行都在。
+buttonByLabel("配置").props.onClick();
+tree = await render(section.component, { t: tPanel });
+segmentedByLabel("分组默认状态").props.onChange("expanded");
+tree = await render(section.component, { t: tPanel });
+buttonByLabel("已归档").props.onClick();
+tree = await render(section.component, { t: tPanel });
+check("the list is back to expanded for the following checks", rowsSeen().length === 3, `${rowsSeen().length} row(s)`);
 
 // 检查失败：显示原因，不谎报"已是最新"。
 buttonByLabel("配置").props.onClick();
