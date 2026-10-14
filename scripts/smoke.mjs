@@ -28,7 +28,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { apply, compareVersions, dirStats, forgetDirStats, inject, insideRoot, isExpired, name, retentionCutoff } from "../lib/index.js";
 
 function dshHome() {
@@ -749,15 +749,19 @@ try {
 	//（线协议不保证它不是一个相对路径），所以拼出来的结果必须再校验一次"落在允许的根下"。
 	// 这里直接单测那道判据本身：`<root>` 相等、真子路径放行；兄弟目录（前缀相同但不带分隔符）
 	// 与任何 `..` 逃逸一律拒绝。
-	const root = "C:\\Users\\x\\.dsh\\sessions";
+	// **路径必须用 `join()` 拼**：判据比的是 `path.sep`，而 CI 跑在 Linux 上 —— 写死 `\\`
+	// 的断言在那边必挂（2026-10-14 CI 首跑就是这条 `73/74`：`self=true child=false`）。
+	const root = join(sep, "srv", "dsh", "sessions");
+	const sibling = `${root}-evil`;
+	const child = join(root, "--slug--", "session-1");
 	check(
 		"the path guard only admits the root itself and its real descendants",
 		insideRoot(root, root) === true &&
-			insideRoot(root, `${root}\\--slug--\\session-1`) === true &&
-			insideRoot(root, "C:\\Users\\x\\.dsh\\sessions-evil") === false &&
-			insideRoot(root, "C:\\Users\\x\\.dsh") === false &&
-			insideRoot(root, "C:\\Windows") === false,
-		`self=${insideRoot(root, root)} child=${insideRoot(root, `${root}\\a`)} sibling=${insideRoot(root, "C:\\Users\\x\\.dsh\\sessions-evil")}`
+			insideRoot(root, child) === true &&
+			insideRoot(root, sibling) === false &&
+			insideRoot(root, dirname(root)) === false &&
+			insideRoot(root, join(sep, "nope")) === false,
+		`self=${insideRoot(root, root)} child=${insideRoot(root, child)} sibling=${insideRoot(root, sibling)}`
 	);
 	// id 里带 `..` 时，拼出来的路径落在允许的根之外 —— 必须拒绝，而不是把它交给系统文件管理器。
 	const escape = await plugin.invoke("open", { ids: ["../../../Windows"] });
