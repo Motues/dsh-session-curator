@@ -4,7 +4,7 @@
  * 做法：用从真实 `<DSH_HOME>/storages/workspace.json` 读出的工作区/归档/置顶集合搭一个
  * 假 `workspaceRegistry`，再用假 `ctx` 调 `apply(ctx)`，然后**用真实 `Request` 走一遍
  * 插件注册的精确 Fetch 路由**（`/api/session-curator/<endpoint>`），信封、分发、
- * 入参归一化一起测。那个文件**不存在**时降级成空表（CI runner 就是这种情况，见
+ * 入参归一化一起测。那个文件**不存在**时降级成空表（没装过 DSH 的机器就是这种情况，见
  * `readWorkspaceTable()`）—— 断言不依赖真实数据，所以两条路都该通过。
  *
  * 假 ctx 只提供 `connection.fetch.register`：**故意不给 `rpc`，也不给 `webServer`**，
@@ -43,7 +43,7 @@ const workspaceFile = join(home, "storages", "workspace.json");
 /**
  * 读真实 `workspace.json`；**只有**"文件不存在"才降级成空表。
  *
- * 为什么要有这条降级：CI runner（以及任何没装过 DSH 的机器）上 `<DSH_HOME>` 根本不存在，
+ * 为什么要有这条降级：没装过 DSH 的机器（例如一台干净的 Linux 机器）上 `<DSH_HOME>` 根本不存在，
  * 直接 `readFile` 会让 `pnpm test` 以 ENOENT 崩掉 —— 而本脚本的断言并不依赖真实数据
  *（它依赖的是"宿主真的去读了一遍 sessions 根"这件事本身）。实测空表时 71 条全过。
  * 别的错（JSON 坏了 / 权限）必须照旧抛出去，别把真问题一起吞掉。
@@ -749,8 +749,9 @@ try {
 	//（线协议不保证它不是一个相对路径），所以拼出来的结果必须再校验一次"落在允许的根下"。
 	// 这里直接单测那道判据本身：`<root>` 相等、真子路径放行；兄弟目录（前缀相同但不带分隔符）
 	// 与任何 `..` 逃逸一律拒绝。
-	// **路径必须用 `join()` 拼**：判据比的是 `path.sep`，而 CI 跑在 Linux 上 —— 写死 `\\`
-	// 的断言在那边必挂（2026-10-14 CI 首跑就是这条 `73/74`：`self=true child=false`）。
+	// **路径必须用 `join()` 拼**：判据比的是 `path.sep`。2026-10-14 这条断言曾经写死 `\\`，
+	// 于是在 Linux 上（`sep` 是 `/`，`root + "/"` 匹配不上反斜杠子路径）挂成 `73/74`：
+	// `self=true child=false sibling=false` —— 判据本身没问题，是断言不可移植。
 	const root = join(sep, "srv", "dsh", "sessions");
 	const sibling = `${root}-evil`;
 	const child = join(root, "--slug--", "session-1");

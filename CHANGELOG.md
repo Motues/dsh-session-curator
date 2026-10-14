@@ -7,6 +7,18 @@
 > `scripts/release.mjs` 会按 `## [<版本>]` 这个标题格式取出对应小节，作为 GitHub Release 的正文 ——
 > 发版时把 `Unreleased` 改成 `## [X.Y.Z] - YYYY-MM-DD` 再提交即可。
 
+## [Unreleased]
+
+### 内部
+
+- **删除 CI**（`.github/workflows/ci.yml`）：发布前自己本地检查即可。原来那道"`lib/` 必须和
+  `src/` 同步"的闸（CI 的第 4 步 `git diff --exit-code -- lib/`）挪到**发布前**：新增
+  `scripts/lib-sync.mjs` 与 `pnpm run check:lib`，`prepublishOnly` 变成
+  `node scripts/lib-sync.mjs && pnpm test` —— 改了 `src/` 忘了 `pnpm run build` 就发不出去。
+  随之失去的自动检查：lockfile 与 `package.json` 是否一致（原来靠 `pnpm install --frozen-lockfile`）。
+- 修掉一条只在 Linux 上挂的自检断言（`scripts/smoke.mjs` 的路径守卫，写死了 Windows 反斜杠，
+  曾让 v0.2.0 那次 CI 跑成 `73/74`）；只动 `scripts/`，已发布的 0.2.0 内容不受影响。
+
 ## [0.2.0] - 2026-10-14
 
 ### 新增

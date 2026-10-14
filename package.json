@@ -104,12 +104,13 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json",
     "test": "pnpm run build && node scripts/artifact.mjs && node scripts/client.mjs && node scripts/smoke.mjs && node scripts/activation.mjs",
-    "check": "pnpm run typecheck && pnpm run format:check && node --check lib/index.js && node --check lib/client.js && node --check scripts/artifact.mjs && node --check scripts/check-profile.mjs && node --check scripts/client.mjs",
+    "check": "pnpm run typecheck && pnpm run format:check && node --check lib/index.js && node --check lib/client.js && node --check scripts/artifact.mjs && node --check scripts/check-profile.mjs && node --check scripts/client.mjs && node --check scripts/lib-sync.mjs",
+    "check:lib": "node scripts/lib-sync.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "release": "node scripts/release.mjs",
     "check:profile": "node scripts/check-profile.mjs",
-    "prepublishOnly": "pnpm test"
+    "prepublishOnly": "node scripts/lib-sync.mjs && pnpm test"
   },
   "files": [
     "lib",
