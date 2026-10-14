@@ -53,7 +53,11 @@ export async function rawCall(endpoint: Endpoint, payload?: EndpointPayload): Pr
 	} catch {
 		throw new Error(`响应不是 JSON（${url}）`);
 	}
-	const message = envelope as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: unknown; error?: { code?: string; message?: string } } } | null;
+	const message = envelope as {
+		type?: unknown;
+		rpcId?: unknown;
+		result?: { ok?: unknown; value?: unknown; error?: { code?: string; message?: string } };
+	} | null;
 	if (!message || message.type !== "server-response" || typeof message.rpcId !== "string") {
 		throw new Error("无效的 server-response 信封");
 	}

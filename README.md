@@ -33,9 +33,9 @@ From GitHub instead of npm:
 dsh plugin --profile desktop add github:Motues/dsh-session-curator
 ```
 
-The command runs pnpm inside that profile and records the package in both `dependencies` and `dsh.profile.bundles`. Restart DSH to pick up the host half; the client half only needs a page efresh.
+The command runs pnpm inside that profile and records the package in both `dependencies` and `dsh.profile.bundles`. Restart DSH to pick up the host half; the client half only needs a page refresh.
 
-The published package is dependency-free and needs no build: `lib/` is plain ESM JavaScript(`lib/index.js` for the host half, `lib/client.js` for the client bundle). Sources live in `src/` as TypeScript; contributors run `npm install` once and `npm run build` (tsc for the host half, esbuild for the client bundle) to regenerate `lib/`.
+The published package is dependency-free and needs no build: `lib/` is plain ESM JavaScript(`lib/index.js` for the host half, `lib/client.js` for the client bundle). Sources live in `src/` as TypeScript; contributors run `pnpm install` once and `pnpm run build` (tsc for the host half, esbuild for the client bundle) to regenerate `lib/`.
 
 ## License
 

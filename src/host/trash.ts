@@ -3,16 +3,44 @@
  *
  * 这个文件里每一条顺序都是踩过事故之后定下来的，动之前先读注释；回归测试在
  * `scripts/smoke.mjs` 的"软删除语义（临时 DSH_HOME）"那一段。
+ *
+ * ── `__trash.json`（回收站条目的元数据）──────────────────────────────────
+ * 位置：`<DSH_HOME>/storages/session-manager/trash/<sessionId>/__trash.json`，
+ * 与会话自己的文件（`session.jsonl` 等）**同级同搬** —— 所以"恢复"就是把整个目录搬回
+ * `<DSH_HOME>/sessions/<slug>/<sessionId>/`，元数据跟着回去，搬完再删掉它。
+ *
+ * **v1**（当前，`TRASH_META_VERSION = 1`）的字段：
+ *
+ * | 字段 | 类型 | 说明 |
+ * | --- | --- | --- |
+ * | `version` | `number` | 写这份文件的 schema 版本。**最早那一版没有这个字段**（插件还叫 `dsh-session-manager` 的时代），读的时候按 v1 处理 |
+ * | `sessionId` | `string` | 会话 id；与目录名一致，冗余存一份便于人眼排错 |
+ * | `slug` | `string` | 原目录 `<DSH_HOME>/sessions/<slug>/`。**恢复的关键字段**：缺失或不是非空字符串就恢复不了，界面会按 `restorable: false` 显示"无法恢复（缺元数据）" |
+ * | `title` | `string \| null` | 删除时的标题（只用于展示） |
+ * | `cwd` | `string \| null` | 原工作区路径；恢复时拿它去 `resolveByPath()` 把会话挂回去 |
+ * | `workspaceId` | `string \| null` | 原工作区 id（展示 / 分组用，恢复**不**依赖它） |
+ * | `workspaceTitle` | `string \| null` | 原工作区标题（同上） |
+ * | `wasArchived` | `boolean` | 删除前是否已经在归档集合里；恢复时照原样还原。老条目没有这个字段，按 `false` 处理 |
+ * | `deletedAt` | `number` | 删除时间（`Date.now()`）。`0` 或缺失 = 认不出删除时间的老条目，**永远不算过期**，只能逐条永久删除（见 `retention.ts`） |
+ *
+ * **版本约定：加字段不升版**。
+ *   1. 读方必须容忍**缺字段**（老条目、以及将来加了字段之后的新条目），逐字段给默认值 ——
+ *      正因为如此，"新增一个可选字段"**不需要**动 `version`。
+ *   2. 只有**不兼容**的改动（改字段含义、挪位置、不重写就读不对）才 `+1`，并且必须同时
+ *      `readTrashMeta()` 里补一段迁移：把老版本升成新版本，再往下走。
+ *   3. 读到**比自己新**的 `version` 一律**拒绝**（`readTrashMeta()` 抛错，逐项失败里带原因），
+ *      绝不按旧语义硬猜 —— 猜错的代价是"把一个会话恢复进错误的目录"。
  */
 import { existsSync, promises as fsp } from "node:fs";
 import { join } from "node:path";
 import { messageOf, moveDir, type Projection } from "./fs-utils.js";
 import { META_FILE, PROJ_FILE, projCacheFile, sessionsRoot, trashRoot } from "./paths.js";
+import { isExpired, retentionCutoff } from "./retention.js";
 import type { SessionDirInfo, ItemAction } from "./session-manager.js";
 import type { WorkspaceLike, WorkspaceRegistryLike } from "./context.js";
-import type { MutationResult } from "../shared/protocol.js";
+import type { MutationResult, TrashRow } from "../shared/protocol.js";
 
-/** `trash` / `restore` / `purge` 需要的那部分管理器能力（避免两个模块互相 import 值）。 */
+/** `trash` / `restore` / `purge` / `trash-stats` 需要的那部分管理器能力（避免两个模块互相 import 值）。 */
 export interface TrashHost {
 	readonly registry: WorkspaceRegistryLike;
 	each(ids: string[], action: ItemAction): Promise<MutationResult>;
@@ -20,6 +48,24 @@ export interface TrashHost {
 	findWorkspaceOf(sessionId: string): WorkspaceLike | undefined;
 	readProjection(sessionId: string): Promise<Projection>;
 	sessionActivity(sessionId: string): Promise<unknown[]>;
+	/** `purge-older-than` 专用：按 `deletedAt` 挑过期条目要读回收站清单。 */
+	listTrash(): Promise<TrashRow[]>;
+}
+
+/** `__trash.json` 当前版本（字段表与版本约定见文件头）。 */
+export const TRASH_META_VERSION = 1;
+
+/** `__trash.json` 的形状（写入侧的真实类型；读取侧见 `readTrashMeta()`）。 */
+export interface TrashMeta {
+	version: number;
+	sessionId: string;
+	slug: string;
+	title: string | null;
+	cwd: string | null;
+	workspaceId: string | null;
+	workspaceTitle: string | null;
+	wasArchived: boolean;
+	deletedAt: number;
 }
 
 /**
@@ -96,29 +142,62 @@ export async function trashSessions(host: TrashHost, ids: string[]): Promise<Mut
 				// 缓存搬不动不影响会话本身
 			}
 		}
-		await fsp.writeFile(
-			join(target, META_FILE),
-			JSON.stringify(
-				{
-					version: 1,
-					sessionId,
-					slug: info.slug,
-					title: projection.title,
-					cwd: projection.cwd,
-					workspaceId: workspace ? String(workspace.id) : null,
-					workspaceTitle: workspace ? workspace.title : null,
-					// 删除前是否已经归档 —— 恢复时要照原样还原（老条目没有这个字段，
-					// 一律按"没归档过"处理，也就是恢复成普通会话）。
-					wasArchived,
-					deletedAt: Date.now()
-				},
-				null,
-				2
-			),
-			"utf8"
-		);
+		// 写入侧就用 `TrashMeta` 这个类型：schema 改了却忘了改字段表，tsc 当场就红。
+		const meta: TrashMeta = {
+			version: TRASH_META_VERSION,
+			sessionId,
+			slug: info.slug,
+			title: projection.title,
+			cwd: projection.cwd,
+			workspaceId: workspace ? String(workspace.id) : null,
+			workspaceTitle: workspace ? workspace.title : null,
+			// 删除前是否已经归档 —— 恢复时要照原样还原（老条目没有这个字段，
+			// 一律按"没归档过"处理，也就是恢复成普通会话）。
+			wasArchived,
+			deletedAt: Date.now()
+		};
+		await fsp.writeFile(join(target, META_FILE), JSON.stringify(meta, null, 2), "utf8");
 		return steps;
 	});
+}
+
+/**
+ * 读一条回收站元数据（字段表与版本约定见文件头）。
+ *
+ * 三种结果：
+ *   - 文件不在 / 不是 JSON 对象 / JSON 坏了 → `null`。与"没有元数据"同义：恢复不了，
+ *     但列表仍然要能显示它（`listTrash()` 会给它 `deletedAt: 0` / `restorable: false`）。
+ *   - `version` 缺失（最早那一版写下的）或 ≤ 当前 → 原样返回，字段由调用方逐个校验。
+ *   - `version` **比当前新** → 抛错。语义不可猜，宁可不恢复，也不能把一个会话按旧规则
+ *     塞进错误的目录（错误信息会出现在批量操作的逐项失败里）。
+ *
+ * 迁移放哪：将来真的升到 v2 时，在这里加一段"把 v1 读成 v2 形状"的转换，
+ * 然后再 `return`；`version` 的**当前**值只认 `TRASH_META_VERSION`。
+ */
+export async function readTrashMeta(dir: string): Promise<Record<string, unknown> | null> {
+	let line: string;
+	try {
+		line = await fsp.readFile(join(dir, META_FILE), "utf8");
+	} catch {
+		return null;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+	// 跨 JSON 边界的一次收窄（AGENTS.md §5 允许的那种）：上面已经证明它是个对象。
+	const meta = parsed as Record<string, unknown>;
+	// `version` 缺失 = 最早那版（插件还叫 `dsh-session-manager` 的时代）写下的，按 v1 处理。
+	const written = typeof meta.version === "number" ? meta.version : TRASH_META_VERSION;
+	if (written > TRASH_META_VERSION) {
+		throw new Error(
+			`这条回收站元数据是更新版本的插件写的（version ${written}，本插件只认到 ${TRASH_META_VERSION}）：先升级插件，再恢复`
+		);
+	}
+	return meta;
 }
 
 /**
@@ -135,12 +214,8 @@ export async function restoreSessions(host: TrashHost, ids: string[]): Promise<M
 		const steps: string[] = [];
 		const source = join(trashRoot(), sessionId);
 		if (!existsSync(source)) throw new Error("回收站里没有这个会话");
-		let meta: Record<string, unknown> | null = null;
-		try {
-			meta = JSON.parse(await fsp.readFile(join(source, META_FILE), "utf8"));
-		} catch {
-			meta = null;
-		}
+		// 版本比插件新时这里会抛（原因进逐项失败），别的坏情况一律回 null。
+		const meta = await readTrashMeta(source);
 		if (typeof meta?.slug !== "string" || meta.slug === "") {
 			throw new Error("缺少回收站元数据，无法确定原目录");
 		}
@@ -194,6 +269,34 @@ export async function restoreSessions(host: TrashHost, ids: string[]): Promise<M
  * 界面上又找不到它）。
  */
 export async function purgeSessions(host: TrashHost, ids: string[]): Promise<MutationResult> {
+	return purgeEach(host, ids);
+}
+
+/**
+ * 「清理 N 天前」：**按时间**批量永久删除。
+ *
+ * 只认回收站目录里的条目（`purgeEach()` 会再查一次 `existsSync`），并且必须先把
+ * `deletedAt` 早于截止时间的条目挑出来 —— 挑的规则与预览共用
+ * `retention.ts` 的 `isExpired()`，所以"预览到的那批"就是"真删的那批"。
+ *
+ * 为什么这里不做静默后台清理：这是**永久删除**，本插件唯一不可撤销的动作。它只能由用户
+ * 在界面上点一次、看过预览、再过一道确认弹窗之后发生（客户端侧见配置页的保留策略一行）。
+ */
+export async function purgeOlderThan(host: TrashHost, days: number): Promise<MutationResult> {
+	const cutoff = retentionCutoff(days);
+	const rows = await host.listTrash();
+	return purgeEach(
+		host,
+		rows.filter((row) => isExpired(row, cutoff)).map((row) => row.sessionId)
+	);
+}
+
+/**
+ * 逐项永久删除的**唯一**实现（`purge` 与 `purge-older-than` 都走它）。
+ *
+ * 顺序不能改：先 `unarchiveSession` 再 `rm`（理由见上面的注释）。
+ */
+async function purgeEach(host: TrashHost, ids: string[]): Promise<MutationResult> {
 	return host.each(ids, async (sessionId) => {
 		const target = join(trashRoot(), sessionId);
 		if (!existsSync(target)) throw new Error("回收站里没有这个会话");

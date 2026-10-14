@@ -1,0 +1,11 @@
+# Prettier 不看的东西。
+#
+# `lib/` 是构建产物（`src/` 才是唯一真源），格式化它等于手改产物；
+# `*.md` 是**手写折行**的文档（AGENTS / TODO / README / CHANGELOG 都按段落手排），
+# Prettier 会把它们按 printWidth 重新灌成一整段，diff 噪音远大于收益；
+# `pnpm-lock.yaml` 归 pnpm 管。
+lib/
+node_modules/
+pnpm-lock.yaml
+*.md
+*.tgz

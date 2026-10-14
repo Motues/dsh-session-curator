@@ -7,6 +7,10 @@
  * 右侧原来并排 2–3 个文字按钮（"看着有点乱"），现在统一成**一个「⋯」菜单**
  * （`Menu` + `IconEllipsisOutlineRegular`，与侧边栏会话行的 ⋯ 完全同一套写法）：
  * 每行的形状一致，动作收进菜单，危险项用 `danger` 标红。
+ *
+ * 正在跑的会话在标题后面挂一个「运行中」小胶囊：那是宿主用官方
+ * `workspace/session-activity` 判定的事实。界面拿它**预先**说明危险动作为什么点不动
+ *（菜单项由面板置 `disabled`），而不是等用户点下去再回一句"会话正在运行"。
  */
 import * as React from "react";
 import { Button, IconEllipsisOutlineRegular, Menu } from "@deepseek-ai/dsh-client-ui-primitives";
@@ -54,6 +58,7 @@ export function SessionRow(props: SessionRowProps): React.ReactElement {
 	if (time !== "") meta.push(time);
 
 	const menu = props.menu;
+	const running = row.active === true;
 	return React.createElement(
 		"div",
 		{ style: props.first ? { ...S.item, borderTop: "none" } : S.item },
@@ -67,7 +72,13 @@ export function SessionRow(props: SessionRowProps): React.ReactElement {
 		React.createElement(
 			"div",
 			{ style: S.itemMain },
-			React.createElement("div", { style: S.itemTitle, title: row.title }, row.title),
+			React.createElement(
+				"div",
+				{ style: S.itemTitleRow },
+				React.createElement("div", { style: S.itemTitle, title: row.title }, row.title),
+				// 胶囊：`flex: 0 0 auto`，所以长标题只会挤标题那一段（它有 minWidth: 0 + 省略号）。
+				running ? React.createElement("span", { style: S.badgeRunning, title: t("runningHint") }, t("running")) : null
+			),
 			React.createElement("div", { style: S.itemMeta, title: row.cwd || "" }, meta.join(" · "))
 		),
 		React.createElement(

@@ -18,10 +18,10 @@
  * 用**逐字照抄**的 Connection（`rpc` / `fetch` / `createSharedFetchHandler` /
  * `endpointFromPath` / `assertChannel` / `assertFetchRoute`）搭出同样的兄弟拓扑，然后：
  *   1. 载入本插件的宿主半区，断言 fiber 变 **ACTIVE**（FAILED 直接判失败）；
- *   2. 断言 8 条 `/api/session-curator/*` 精确路由都登记上了；
+ *   2. 断言 13 条 `/api/session-curator/*` 精确路由都登记上了；
  *   3. 用真 `Request` 走一遍共享处理器（等价于宿主 `/api` 栅栏之后的路径），要 200 + 合法信封；
  *   4. 登记一条"永远不该被碰到"的 webServer —— 谁把实现改回 `rpc.handle()` 就会撞上它；
- *   5. dispose 插件，断言 8 条路由全部释放。
+ *   5. dispose 插件，断言 13 条路由全部释放。
  *
  * 用法：`node scripts/activation.mjs`
  *   找不到 `app.asar` 时打印 SKIP 并以 0 退出；可用 `$env:DSH_APP_ASAR` 指定路径。
@@ -101,21 +101,44 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/;
 function endpointFromPath(channel, pathname) {
 	if (!pathname.startsWith(`${channel}/`)) return undefined;
 	const endpoint = pathname.slice(channel.length + 1);
-	if (endpoint.split("/").some((segment) => segment === "" || segment === "." || segment === ".." || !ENDPOINT_SEGMENT_PATTERN.test(segment))) return undefined;
+	if (
+		endpoint
+			.split("/")
+			.some((segment) => segment === "" || segment === "." || segment === ".." || !ENDPOINT_SEGMENT_PATTERN.test(segment))
+	)
+		return undefined;
 	return endpoint;
 }
 
 function assertChannel(channel) {
-	if (!CHANNEL_PATTERN.test(channel) || channel === "/api") throw new Error(`connection: invalid or reserved RPC channel ${JSON.stringify(channel)}`);
+	if (!CHANNEL_PATTERN.test(channel) || channel === "/api")
+		throw new Error(`connection: invalid or reserved RPC channel ${JSON.stringify(channel)}`);
 }
 
 function assertFetchRoute(route) {
-	if (endpointFromPath("/api", route.path) === undefined) throw new Error(`connection: invalid exact Fetch route ${JSON.stringify(route.path)}`);
+	if (endpointFromPath("/api", route.path) === undefined)
+		throw new Error(`connection: invalid exact Fetch route ${JSON.stringify(route.path)}`);
 	if (route.methods.length === 0) throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} declares no methods`);
-	if (new Set(route.methods).size !== route.methods.length) throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} repeats a method`);
+	if (new Set(route.methods).size !== route.methods.length)
+		throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} repeats a method`);
 }
 
-const ENDPOINTS = ["snapshot", "archive", "unarchive", "pin", "unpin", "trash", "restore", "purge", "check-update"];
+const ENDPOINTS = [
+	"snapshot",
+	"describe",
+	"archive",
+	"unarchive",
+	"pin",
+	"unpin",
+	"trash",
+	"restore",
+	"purge",
+	"trash-stats",
+	"purge-older-than",
+	"usage",
+	"open",
+	"check-update"
+];
 const CHANNEL = "/api";
 const PREFIX = "session-curator";
 const ROUTE_PREFIX = `${CHANNEL}/${PREFIX}`;
@@ -176,7 +199,8 @@ class Connection extends Service {
 		assertFetchRoute(route);
 		const registered = { methods: new Set(route.methods), requestBody: route.requestBody, fetch: route.fetch };
 		return owner.effect(() => {
-			if (this.fetchRoutes.has(route.path)) throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} is already registered`);
+			if (this.fetchRoutes.has(route.path))
+				throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} is already registered`);
 			this.fetchRoutes.set(route.path, registered);
 			return () => {
 				this.fetchRoutes.delete(route.path);
@@ -226,7 +250,9 @@ root.plugin({
 });
 root.plugin({ name: "workspace-registry", apply: (ctx) => void new WorkspaceRegistry(ctx) });
 
-const plugin = await import(pathToFileURL(process.argv[2] === undefined ? join(import.meta.dirname, "../lib/index.js") : resolve(process.argv[2])).href);
+const plugin = await import(
+	pathToFileURL(process.argv[2] === undefined ? join(import.meta.dirname, "../lib/index.js") : resolve(process.argv[2])).href
+);
 const fiber = root.plugin(plugin);
 let failure;
 try {
@@ -235,7 +261,11 @@ try {
 	failure = error;
 }
 
-check("host half activates (fiber ACTIVE)", fiber.state === 2, failure === undefined ? `state=${fiber.state}` : `state=${fiber.state}: ${failure.message}`);
+check(
+	"host half activates (fiber ACTIVE)",
+	fiber.state === 2,
+	failure === undefined ? `state=${fiber.state}` : `state=${fiber.state}: ${failure.message}`
+);
 check(
 	"registers one exact /api route per endpoint",
 	ENDPOINTS.every((endpoint) => connection.fetchRoutes.has(`${ROUTE_PREFIX}/${endpoint}`)),
@@ -244,11 +274,13 @@ check(
 
 const shared = connection.createSharedFetchHandler("/api");
 const rpcId = "activation-probe";
-const response = await shared.fetch(new Request(`http://127.0.0.1:19387${ROUTE_PREFIX}/snapshot`, {
-	method: "POST",
-	headers: { "content-type": "application/json" },
-	body: JSON.stringify({ type: "client-request", rpcId, method: `${PREFIX}/snapshot`, payload: {} })
-}));
+const response = await shared.fetch(
+	new Request(`http://127.0.0.1:19387${ROUTE_PREFIX}/snapshot`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ type: "client-request", rpcId, method: `${PREFIX}/snapshot`, payload: {} })
+	})
+);
 const text = await response.text();
 let envelope;
 try {
@@ -257,8 +289,44 @@ try {
 	// 路由没挂上时这里拿到的是 Connection 的纯文本 404，别让它盖掉上面的 FAIL 列表。
 	envelope = { type: "unparsable", result: { ok: false, error: { message: text.slice(0, 80) } } };
 }
-check("POST /api/session-curator/snapshot answers 200 + Connection envelope", response.status === 200 && envelope.type === "server-response" && envelope.rpcId === rpcId, `status=${response.status} type=${envelope.type} ok=${envelope.result?.ok}${envelope.result?.ok === false ? ` error=${JSON.stringify(envelope.result.error)}` : ""}`);
-check("snapshot value carries the documented shape", envelope.result?.ok === true && ["dshHome", "trashDir", "sessionsDir", "archived", "pinned", "trashed", "totals"].every((key) => key in (envelope.result.value ?? {})));
+check(
+	"POST /api/session-curator/snapshot answers 200 + Connection envelope",
+	response.status === 200 && envelope.type === "server-response" && envelope.rpcId === rpcId,
+	`status=${response.status} type=${envelope.type} ok=${envelope.result?.ok}${envelope.result?.ok === false ? ` error=${JSON.stringify(envelope.result.error)}` : ""}`
+);
+check(
+	"snapshot value carries the documented shape",
+	envelope.result?.ok === true &&
+		["dshHome", "trashDir", "sessionsDir", "archived", "pinned", "trashed", "totals"].every(
+			(key) => key in (envelope.result.value ?? {})
+		)
+);
+
+// `describe`（第十个端点）也走一遍真 Request：它读的是**真实** DSH_HOME，所以这里只问一个
+// 一定不存在的 id —— 期望 200 + `{ok:false}` 的错误信封，而不是 404 或抛异常。
+const describeRpcId = "activation-describe";
+const describeResponse = await shared.fetch(
+	new Request(`http://127.0.0.1:19387${ROUTE_PREFIX}/describe`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			type: "client-request",
+			rpcId: describeRpcId,
+			method: `${PREFIX}/describe`,
+			payload: { ids: ["session-curator-activation-missing"] }
+		})
+	})
+);
+const describeEnvelope = await describeResponse.json();
+check(
+	"POST /api/session-curator/describe answers 200 + a business error envelope for an unknown id",
+	describeResponse.status === 200 &&
+		describeEnvelope.type === "server-response" &&
+		describeEnvelope.rpcId === describeRpcId &&
+		describeEnvelope.result?.ok === false &&
+		describeEnvelope.result.error?.code === "session-curator/error",
+	`status=${describeResponse.status} result=${JSON.stringify(describeEnvelope.result)}`
+);
 
 const unregistered = await shared.fetch(new Request("http://127.0.0.1:19387/api/not-ours", { method: "POST" }));
 check("an unregistered /api path is left to Connection (404)", unregistered.status === 404, `status=${unregistered.status}`);
@@ -271,7 +339,13 @@ check("disposing the host half releases every route", connection.fetchRoutes.siz
 // 逐条复刻 @deepseek-ai/dsh-app-boot 的 `lib/types/package-meta.js`（readPluginMeta /
 // iconOf）：locale 文件**必须能被 Node 解析器按 exports 找到**，图标是 manifest 相对路径、
 // 只能是 SVG/PNG/JPEG/WebP、realpath 之后仍在 manifest 目录内、且 ≤ 256 KiB。
-const ICON_MEDIA_TYPES = new Map([[".svg", "image/svg+xml"], [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".webp", "image/webp"]]);
+const ICON_MEDIA_TYPES = new Map([
+	[".svg", "image/svg+xml"],
+	[".png", "image/png"],
+	[".jpg", "image/jpeg"],
+	[".jpeg", "image/jpeg"],
+	[".webp", "image/webp"]
+]);
 const MAX_ICON_BYTES = 256 * 1024;
 
 /** 极简标签配对：够验证我们自己的手写 SVG（跳过注释、自闭合、XML 声明）。 */
@@ -292,7 +366,12 @@ function tagsBalanced(source) {
 	}
 	return stack.length === 0;
 }
-check("the SVG tag checker itself detects imbalance", tagsBalanced("<svg><path/></svg>") === true && tagsBalanced("<svg><path></svg>") === false && tagsBalanced("<svg><path>x</svg>") === false);
+check(
+	"the SVG tag checker itself detects imbalance",
+	tagsBalanced("<svg><path/></svg>") === true &&
+		tagsBalanced("<svg><path></svg>") === false &&
+		tagsBalanced("<svg><path>x</svg>") === false
+);
 
 const pluginDir = resolve(import.meta.dirname, "..");
 // 用 self-reference 解析：不需要插件已经装进 profile，走的是同一张 exports 表。
@@ -310,13 +389,16 @@ try {
 }
 if (manifestPath !== undefined) {
 	check("package.json is reachable through its own exports map", true);
-	check("the manifest exports locale JSON for the metadata reader", (() => {
-		try {
-			return pluginRequire.resolve(`${PACKAGE_NAME}/locale/en.json`).endsWith("en.json");
-		} catch {
-			return false;
-		}
-	})());
+	check(
+		"the manifest exports locale JSON for the metadata reader",
+		(() => {
+			try {
+				return pluginRequire.resolve(`${PACKAGE_NAME}/locale/en.json`).endsWith("en.json");
+			} catch {
+				return false;
+			}
+		})()
+	);
 
 	// 本地化 title / description（app-boot 读取 locale/ 目录下每个 *.json 的 meta）。
 	const englishPath = pluginRequire.resolve(`${PACKAGE_NAME}/locale/en.json`);
@@ -327,29 +409,72 @@ if (manifestPath !== undefined) {
 		const parsed = JSON.parse(readFileSync(pluginRequire.resolve(`${PACKAGE_NAME}/locale/${name}`), "utf8"));
 		dictionaries.set(id, parsed.meta ?? {});
 	}
-	check("every locale file carries meta.title and meta.description", [...dictionaries].every(([, meta]) => typeof meta.title === "string" && meta.title !== "" && typeof meta.description === "string" && meta.description !== ""), [...dictionaries].map(([id, meta]) => `${id}:${meta.title}`).join(", "));
-	const title = { en: manifest.name, ...Object.fromEntries([...dictionaries].filter(([, meta]) => meta.title !== undefined).map(([id, meta]) => [id, meta.title])) };
-	const description = { en: manifest.description ?? "", ...Object.fromEntries([...dictionaries].filter(([, meta]) => meta.description !== undefined).map(([id, meta]) => [id, meta.description])) };
-	check("the plugin card gets a real (non-package-name) title in both languages", title.en !== manifest.name && typeof title.zh === "string" && title.zh !== "", JSON.stringify(title));
-	check("the plugin card gets a description in both languages", typeof description.en === "string" && description.en !== "" && typeof description.zh === "string" && description.zh !== "");
+	check(
+		"every locale file carries meta.title and meta.description",
+		[...dictionaries].every(
+			([, meta]) =>
+				typeof meta.title === "string" && meta.title !== "" && typeof meta.description === "string" && meta.description !== ""
+		),
+		[...dictionaries].map(([id, meta]) => `${id}:${meta.title}`).join(", ")
+	);
+	const title = {
+		en: manifest.name,
+		...Object.fromEntries([...dictionaries].filter(([, meta]) => meta.title !== undefined).map(([id, meta]) => [id, meta.title]))
+	};
+	const description = {
+		en: manifest.description ?? "",
+		...Object.fromEntries(
+			[...dictionaries].filter(([, meta]) => meta.description !== undefined).map(([id, meta]) => [id, meta.description])
+		)
+	};
+	check(
+		"the plugin card gets a real (non-package-name) title in both languages",
+		title.en !== manifest.name && typeof title.zh === "string" && title.zh !== "",
+		JSON.stringify(title)
+	);
+	check(
+		"the plugin card gets a description in both languages",
+		typeof description.en === "string" && description.en !== "" && typeof description.zh === "string" && description.zh !== ""
+	);
 
 	// 图标：路径规则 + 体积 + 内容。
 	const icon = manifest.icon;
-	check("the manifest declares a manifest-relative SVG icon", typeof icon === "string" && !isAbsolute(icon) && ICON_MEDIA_TYPES.get(extname(icon).toLowerCase()) === "image/svg+xml", JSON.stringify(icon));
+	check(
+		"the manifest declares a manifest-relative SVG icon",
+		typeof icon === "string" && !isAbsolute(icon) && ICON_MEDIA_TYPES.get(extname(icon).toLowerCase()) === "image/svg+xml",
+		JSON.stringify(icon)
+	);
 	if (typeof icon === "string") {
 		const iconFile = realpathSync(resolve(dirname(manifestPath), icon));
 		const local = relative(realpathSync(dirname(manifestPath)), iconFile);
 		const size = statSync(iconFile).size;
-		check("the icon stays inside the manifest directory, is a regular file and fits 256 KiB", !local.startsWith("..") && !isAbsolute(local) && statSync(iconFile).isFile() && size <= MAX_ICON_BYTES, `${size} B`);
+		check(
+			"the icon stays inside the manifest directory, is a regular file and fits 256 KiB",
+			!local.startsWith("..") && !isAbsolute(local) && statSync(iconFile).isFile() && size <= MAX_ICON_BYTES,
+			`${size} B`
+		);
 		const svg = readFileSync(iconFile, "utf8");
 		// 注释不算数：只有真正会被渲染的部分才需要自带着色。
 		const shapes = svg.replace(/<!--[\s\S]*?-->/gu, "");
-		check("the icon is well-formed SVG with its own colours (it renders through <img>)", svg.trimStart().startsWith("<svg") && svg.trimEnd().endsWith("</svg>") && tagsBalanced(svg) && !shapes.includes("currentColor"), `${svg.length} chars`);
-		check("the icon uses the same square canvas as DSH's own plugin artwork", /viewBox="0 0 36 36"/u.test(svg) && /width="36"/u.test(svg) && /height="36"/u.test(svg));
+		check(
+			"the icon is well-formed SVG with its own colours (it renders through <img>)",
+			svg.trimStart().startsWith("<svg") && svg.trimEnd().endsWith("</svg>") && tagsBalanced(svg) && !shapes.includes("currentColor"),
+			`${svg.length} chars`
+		);
+		check(
+			"the icon uses the same square canvas as DSH's own plugin artwork",
+			/viewBox="0 0 36 36"/u.test(svg) && /width="36"/u.test(svg) && /height="36"/u.test(svg)
+		);
 		// 只量几何属性（别去扫 xmlns 里的 2000、也别把 #324DE2 读成 324）。
 		const geometryAttributes = [...shapes.matchAll(/\b(?:d|viewBox|x|y|x1|y1|x2|y2|width|height|rx)="([^"]*)"/gu)];
-		const coordinates = geometryAttributes.flatMap((match) => [...match[1].matchAll(/-?\d+(?:\.\d+)?/gu)].map((number) => Number(number[0])));
-		check("every coordinate stays inside the 36×36 canvas", coordinates.length > 0 && coordinates.every((value) => value >= 0 && value <= 36), `${coordinates.length} numbers, max=${Math.max(...coordinates)}`);
+		const coordinates = geometryAttributes.flatMap((match) =>
+			[...match[1].matchAll(/-?\d+(?:\.\d+)?/gu)].map((number) => Number(number[0]))
+		);
+		check(
+			"every coordinate stays inside the 36×36 canvas",
+			coordinates.length > 0 && coordinates.every((value) => value >= 0 && value <= 36),
+			`${coordinates.length} numbers, max=${Math.max(...coordinates)}`
+		);
 	}
 }
 

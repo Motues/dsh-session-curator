@@ -12,11 +12,11 @@
  * `react` 与 `@deepseek-ai/*` 保持 external：它们由 DSH 的模块表在运行时注入，
  * 也就是束里 `factory(require)` 收到的那个 `require`。
  *
- * 用法：`npm run build`（或 `node scripts/build.mjs`）。
+ * 用法：`pnpm run build`（或 `node scripts/build.mjs`）。
  */
 
 /** 构建期依赖只在开发 / 发布时存在（发布包不发 devDependencies），先给一句人话再退出。 */
-const MISSING = "build 需要 devDependencies（esbuild + typescript）：先在本仓库里跑 npm install。";
+const MISSING = "build 需要 devDependencies（esbuild + typescript）：先在本仓库里跑 pnpm install。";
 
 let esbuild;
 try {

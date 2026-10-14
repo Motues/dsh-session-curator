@@ -35,7 +35,7 @@ dsh plugin --profile desktop add github:Motues/dsh-session-curator
 
 这条命令在那个 profile 目录里跑 pnpm，并把这个包同时记进 `dependencies` 和 `dsh.profile.bundles`。宿主半区需要重启 DSH 生效，客户端半区刷新页面即可。
 
-发布出去的包零运行时依赖、安装方无需构建：`lib/` 就是普通 ESM JavaScript（`lib/index.js` 宿主半区，`lib/client.js` 客户端束）。源码是 `src/` 下的 TypeScript：贡献者 `npm install` 一次，再用`npm run build`（宿主半区走 tsc、客户端束走 esbuild）重新生成 `lib/`。
+发布出去的包零运行时依赖、安装方无需构建：`lib/` 就是普通 ESM JavaScript（`lib/index.js` 宿主半区，`lib/client.js` 客户端束）。源码是 `src/` 下的 TypeScript：贡献者 `pnpm install` 一次，再用`pnpm run build`（宿主半区走 tsc、客户端束走 esbuild）重新生成 `lib/`。
 
 ## 许可
 

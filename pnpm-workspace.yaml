@@ -1,0 +1,17 @@
+# pnpm 11 起这些设置只认这个文件：`package.json` 里的 `pnpm` 字段会被忽略，并打印
+# 「The "pnpm" field in package.json is no longer read by pnpm」。本文件是 pnpm 首次
+# 安装时自动创建的（只带一个占位符），下面是逐项定下来之后的最终形态。
+#
+# 1) peerDependencies 不自动安装。
+#    本插件那 10 个 `@deepseek-ai/*` peer 全是 `optional: true`，由 DSH 运行时注入；
+#    真装进 node_modules 只会**掩盖**"宿主半区写了裸标识符导入"这类问题 —— 插件在 profile
+#    里是 junction 挂载，Node 按 realpath 解析根本找不到它们（AGENTS.md §5 / §8.2 第 4 条）。
+autoInstallPeers: false
+
+# 2) esbuild 的 postinstall 明确不跑。
+#    本仓库只用它的 JS API（`scripts/build.mjs`），平台二进制由 `@esbuild/*` 可选依赖提供；
+#    npm 时代这个脚本本来就被拦着（AGENTS.md §11），`lib/` 照常构建。
+#    留 false 而不是 true：装包时执行的脚本越少越好。哪天真的缺二进制，把这里改成 true
+#    （或跑 `pnpm approve-builds`）即可。
+allowBuilds:
+  esbuild: false
