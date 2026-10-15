@@ -1,12 +1,12 @@
 /**
- * 磁盘占用视图（配置页里的一块，只读）。
+ * 磁盘占用视图（独立页签里的一块，只读）。
  *
  * 数据来自 `usage` 端点：宿主扫一遍 `<DSH_HOME>/sessions`，回**聚合 + 两个榜单**。
- * 为什么不在这个组件里从快照算：快照只有"已归档 / 已置顶 / 回收站"三个集合，正在用的
+ * 为什么不在这个组件里从快照算：快照只有"已归档 / 已置顶"两个集合，正在用的
  * 普通会话根本不在里面 —— 而"哪些会话最占地方"恰恰要问全部。
  *
- * 这一块也是"建议归档"的入口：榜单上的每一行都能直接点「归档」归档掉（回收站里的会话
- * 除外 —— 它连目录都搬走了，得先恢复）。正在跑的会话不给点（归档会先停掉它的工作）。
+ * 这一块也是"建议归档"的入口：榜单上的每一行都能直接点「归档」归档掉。
+ * 正在跑的会话不给点（归档会先停掉它的工作）。
  *
  * 已经归档的行给的是**「取消归档」**而不是「归档」：归档集合是幂等的，再点一次「归档」
  * 既不报错也不改变任何东西 —— 点了没反应只能被当成插件坏了。取消归档是无害动作，
@@ -46,25 +46,19 @@ function usageRow(
 	onUnarchive: (sessionId: string) => void
 ): React.ReactElement {
 	const badges: { key: string; label: string; style: unknown }[] = [];
-	if (row.trashed) badges.push({ key: "trashed", label: t("usageTrashed"), style: S.badgeDanger });
-	else if (row.archived) badges.push({ key: "archived", label: t("usageArchived"), style: S.badge });
+	if (row.archived) badges.push({ key: "archived", label: t("usageArchived"), style: S.badge });
 	else if (row.pinned) badges.push({ key: "pinned", label: t("usagePinned"), style: S.badge });
 	// 「运行中」用业务蓝（与列表行里那个胶囊同一个 token）：它是"活着"，不是危险。
 	if (row.active) badges.push({ key: "running", label: t("running"), style: S.badgeRunning });
 	/**
-	 * 右边的动作：三种可能 —— 取消归档 / 归档 / 什么都不给。
-	 *
-	 * 顺序要紧：`trashed` 最优先（目录都搬走了，先恢复才能谈归档），然后是 `archived`
-	 *（已归档就得是"取消归档"），最后才是"没在跑才给归档"。
+	 * 右边的动作：两种可能 —— 取消归档 / 归档（正在跑的不给按钮：归档会先停掉它的工作）。
 	 */
-	const action = row.trashed
-		? null
-		: row.archived
-			? { label: t("usageUnarchive"), run: () => onUnarchive(row.sessionId) }
-			: row.active
-				? null
-				: { label: t("usageArchive"), run: () => onArchive(row.sessionId) };
-	const when = row.deletedAt !== null ? formatTime(row.deletedAt) : formatTime(row.createdAt);
+	const action = row.archived
+		? { label: t("usageUnarchive"), run: () => onUnarchive(row.sessionId) }
+		: row.active
+			? null
+			: { label: t("usageArchive"), run: () => onArchive(row.sessionId) };
+	const when = formatTime(row.createdAt);
 	return React.createElement(
 		"div",
 		{ key: row.sessionId, style: S.usageRow },
@@ -129,8 +123,7 @@ export function UsagePanel(props: UsagePanelProps): React.ReactElement {
 							? (props.error ?? "")
 							: text(t, "usageTotal", {
 									n: usage.totalSessions,
-									size: formatBytes(usage.totalBytes),
-									disk: usage.onDiskSessions
+									size: formatBytes(usage.totalBytes)
 								})
 				)
 			)

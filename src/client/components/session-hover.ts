@@ -2,14 +2,14 @@
  * 侧边栏会话行的 hover 卡片里属于本插件的那一节（`sidebar.session.row.hover` 槽位）。
  *
  * DSH 的卡片自己已经有标题 / 相对时间 / 运行状态，这里只补它没有的**磁盘事实**：
- * 体积、文件数、原目录，以及"这条现在在归档 / 回收站里"。
+ * 体积、文件数、原目录，以及"这条现在在归档 / 置顶里"。
  *
  * 数据走 `detail.ts` 的缓存（`describe` 端点）—— 这个组件每次划过都会被挂载一次，
  * 拿不到就什么都不画：卡片少一节，总比在每一行（含"新会话"占位行）挂一句"读取失败"好。
  */
 import * as React from "react";
 import { describeSession } from "../detail.js";
-import { formatBytes, formatTime } from "../format.js";
+import { formatBytes } from "../format.js";
 import { text, type TFn } from "../i18n.js";
 import { S } from "../styles.js";
 import type { SessionDetail } from "../../shared/protocol.js";
@@ -43,10 +43,9 @@ export function SessionHover(props: SessionHoverProps): React.ReactElement | nul
 
 	if (detail === null) return null;
 
-	const badges: { key: string; label: string; danger: boolean }[] = [];
-	if (detail.trashed) badges.push({ key: "trashed", label: t("hoverTrashed"), danger: true });
-	if (detail.archived) badges.push({ key: "archived", label: t("hoverArchived"), danger: false });
-	if (detail.pinned) badges.push({ key: "pinned", label: t("hoverPinned"), danger: false });
+	const badges: { key: string; label: string }[] = [];
+	if (detail.archived) badges.push({ key: "archived", label: t("hoverArchived") });
+	if (detail.pinned) badges.push({ key: "pinned", label: t("hoverPinned") });
 
 	const lines: React.ReactElement[] = [
 		React.createElement(
@@ -65,16 +64,6 @@ export function SessionHover(props: SessionHoverProps): React.ReactElement | nul
 			)
 		);
 	}
-	if (detail.trashed && detail.deletedAt) {
-		lines.push(
-			React.createElement(
-				"div",
-				{ key: "deletedAt", style: S.hoverLine },
-				React.createElement("span", { style: S.hoverLabel }, t("hoverDeleted")),
-				React.createElement("span", { style: S.hoverMeta }, formatTime(detail.deletedAt))
-			)
-		);
-	}
 	if (badges.length > 0) {
 		lines.push(
 			React.createElement(
@@ -85,7 +74,7 @@ export function SessionHover(props: SessionHoverProps): React.ReactElement | nul
 						"span",
 						{
 							key: badge.key,
-							style: badge.danger ? S.hoverBadgeDanger : S.hoverBadge
+							style: S.hoverBadge
 						},
 						badge.label
 					)

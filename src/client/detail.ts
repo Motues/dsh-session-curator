@@ -2,8 +2,8 @@
  * 单个会话事实的**带缓存**读取（`describe` 端点），供侧边栏 hover 卡片用。
  *
  * 为什么要缓存：DSH 的 hover 卡片在指针停留 800ms 后打开，**每次划过都会开一次**；
- * 宿主的 `describe` 要 `listTrash()` + `scanSessionDirs()`（两个 readdir 树 + 每条目
- * `stat`）。不缓存就是"鼠标扫过侧边栏 = 几百次目录扫描"。
+ * 宿主的 `describe` 要 `scanSessionDirs()`（整个 sessions 根的 readdir 树）+ 单条
+ * `stat`。不缓存就是"鼠标扫过侧边栏 = 几百次目录扫描"。
  *
  * 失效策略两层：
  *   1. 插件自己的写操作（`mutationStore` 自增）→ 立刻清空 —— 用户刚归档 / 删除完，

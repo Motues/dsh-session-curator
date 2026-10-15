@@ -1,5 +1,5 @@
 /**
- * 设置面板：已归档 / 已置顶 / 回收站三个数据页签 + 配置页。
+ * 设置面板：已归档 / 已置顶两个数据页签 + 磁盘占用 + 配置页。
  *
  * 这个文件只做"装配与状态"：分组 / 排序 / 折叠的**规则**在 `groups.ts`（纯函数、可单测），
  * 与宿主通信在 `api.ts`。控件形状（一行会话 + 一个 ⋯）由 `session-row.ts` 统一。
@@ -10,7 +10,6 @@ import {
 	IconCopyOutlineRegular,
 	IconFolderOpenRegular,
 	IconPinOutlineRegular,
-	IconRefreshOutlineRegular,
 	IconSearchOutlineRegular,
 	IconTrashOutlineRegular,
 	IconUnarchiveOutlineRegular,
@@ -19,7 +18,7 @@ import {
 	Switch
 } from "@deepseek-ai/dsh-client-ui-primitives";
 import { call, firstFailure } from "../api.js";
-import { requestPurge, requestPurgeOld, requestTrash, mutationStore } from "../dialog.js";
+import { requestDelete, mutationStore } from "../dialog.js";
 import { copyText, openSessionPath } from "../export.js";
 import { formatBytes } from "../format.js";
 import {
@@ -42,12 +41,7 @@ import { TAB_LABEL, text, type TFn } from "../i18n.js";
 import { reportError } from "../runtime.js";
 import {
 	DEFAULT_SETTINGS,
-	TRASH_DAYS_MAX,
-	TRASH_DAYS_MIN,
-	TRASH_RETENTION_DAYS,
-	effectiveTrashDays,
 	groupingStore,
-	parseCustomDays,
 	readSidebarArchived,
 	settingsStore,
 	updateSettings,
@@ -63,17 +57,17 @@ import { Dropdown } from "./dropdown.js";
 import { GroupHeader, workspaceActionsOf } from "./group-header.js";
 import { SessionRow, type RowMenu } from "./session-row.js";
 import { UsagePanel } from "./usage-panel.js";
-import type { Endpoint, MutationResult, PanelRow, Snapshot, TrashStats, Usage } from "../../shared/protocol.js";
+import type { Endpoint, MutationResult, PanelRow, Snapshot, Usage } from "../../shared/protocol.js";
 
 /**
- * 面板上的页签：三个数据页签 + 磁盘占用 + 配置页。
+ * 面板上的页签：两个数据页签 + 磁盘占用 + 配置页。
  *
  * 「磁盘占用」是**独立页签**（不塞进配置页）：它是一份"看数据"的视图，跟设置项混在一页
  * 会让配置页变成两件事的杂烩；独立成页之后它还能有自己的刷新按钮。
  */
 type PanelTab = DataTab | "usage" | "config";
 /** 会改动数据的端点（`run()` 只用来打这些）。 */
-type MutationEndpoint = Exclude<Endpoint, "snapshot" | "describe" | "check-update" | "trash-stats" | "purge-older-than" | "usage" | "open">;
+type MutationEndpoint = Exclude<Endpoint, "snapshot" | "describe" | "check-update" | "usage" | "open">;
 
 /** 渲染块：分组时一个分组一块，平铺时整页一块（`group` 为 null）。 */
 interface PanelBlock {
@@ -109,10 +103,6 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 	const [menuFor, setMenuFor] = React.useState<string | null>(null);
 	// 分组标题上的「整个工作区」菜单：同一时刻只开一个（存分组 key）。
 	const [workspaceMenuFor, setWorkspaceMenuFor] = React.useState<string | null>(null);
-	// 保留策略的预览（只读端点）：配置页上显示"将删除 N 个会话 · X MB"。
-	const [trashStats, setTrashStats] = React.useState<TrashStats | null>(null);
-	const [trashStatsError, setTrashStatsError] = React.useState<string | null>(null);
-	const [trashStatsBusy, setTrashStatsBusy] = React.useState<boolean>(false);
 	// 磁盘占用视图（只读端点）：只在「磁盘占用」页签打开时拉。
 	const [usage, setUsage] = React.useState<Usage | null>(null);
 	const [usageError, setUsageError] = React.useState<string | null>(null);
@@ -171,33 +161,6 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 		setMenuFor(null);
 		setWorkspaceMenuFor(null);
 	}, [tab]);
-
-	// 打开配置页 / 改保留天数时拉一次预览（只读端点，宿主现算）。
-	// 依赖的是 `effectiveTrashDays()` 的结果而不是某个具体字段：档位与自定义天数任一变化
-	// 都要重新预览，而"到底用哪个"只有那一个函数说了算。
-	const retentionDays = effectiveTrashDays(settings);
-	React.useEffect(() => {
-		if (tab !== "config") return;
-		let cancelled = false;
-		setTrashStatsBusy(true);
-		setTrashStatsError(null);
-		void call<TrashStats>("trash-stats", { days: retentionDays })
-			.then((value) => {
-				if (!cancelled) setTrashStats(value);
-			})
-			.catch((failure: unknown) => {
-				if (!cancelled) {
-					setTrashStats(null);
-					setTrashStatsError(reportError(failure));
-				}
-			})
-			.finally(() => {
-				if (!cancelled) setTrashStatsBusy(false);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [tab, retentionDays]);
 
 	// 磁盘占用：只在「磁盘占用」页签打开时拉一次（它会扫整个 sessions 根，不该随手就发）。
 	// 每一次变更（revision 自增）之后也重拉 —— 归档 / 删除都会改变体积与榜单；
@@ -271,8 +234,7 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 
 	const archived: PanelRow[] = snapshot ? snapshot.archived : [];
 	const pinned: PanelRow[] = snapshot ? snapshot.pinned : [];
-	const trashed: PanelRow[] = snapshot ? snapshot.trashed : [];
-	const rows = sortRows(tab === "archived" ? archived : tab === "pinned" ? pinned : tab === "trash" ? trashed : [], settings.order);
+	const rows = sortRows(tab === "archived" ? archived : pinned, settings.order);
 	/**
 	 * 搜索与过滤**只影响显示**：勾选、批量操作与页签计数仍然按整个页签的行算
 	 *（`selectedRows` 用的是上面那份未过滤的 `rows`）。排序先做、过滤后做，
@@ -297,39 +259,28 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 	const tabs: { id: PanelTab; label: string; count: number }[] = [
 		{ id: "archived", label: t(TAB_LABEL.archived), count: archived.length },
 		{ id: "pinned", label: t(TAB_LABEL.pinned), count: pinned.length },
-		{ id: "trash", label: t(TAB_LABEL.trash), count: trashed.length },
 		{ id: "usage", label: t("titleUsage"), count: 0 },
 		{ id: "config", label: t("titleConfig"), count: 0 }
 	];
 
 	/**
-	 * 排序下拉的档位（原来是一排 `SegmentedControl` 滑块，5 档挤不下所以改成下拉）。
-	 * 顺序：原顺序 → 标题 → 体积 → 创建时间 → 删除时间。
+	 * 排序下拉的档位（原来是一排 `SegmentedControl` 滑块，多档挤不下所以改成下拉）。
+	 * 顺序：原顺序 → 标题 → 体积 → 创建时间。
 	 */
 	const orderOptions = [
 		{ value: "host" as OrderKey, label: t("orderHost") },
 		{ value: "title" as OrderKey, label: t("orderTitle") },
 		{ value: "bytes" as OrderKey, label: t("orderBytes") },
-		{ value: "createdAt" as OrderKey, label: t("orderCreatedAt") },
-		{ value: "deletedAt" as OrderKey, label: t("orderDeletedAt") }
+		{ value: "createdAt" as OrderKey, label: t("orderCreatedAt") }
 	];
-	/**
-	 * 保留天数的档位下拉 + 自定义输入框。
-	 *
-	 * `retentionCustomDays` 是用户填的原始字符串：合法就用它（`effectiveTrashDays()`），
-	 * 非法则**这一格不生效**、输入框标红 —— 不做夹取，免得"填的数和算的数不一样"。
-	 */
-	const customDays = settings.trashDaysCustom;
-	const customDaysValid = customDays.trim() === "" || parseCustomDays(customDays) !== null;
-	const retentionOptions = TRASH_RETENTION_DAYS.map((days) => ({ value: days, label: text(t, "retentionDays", { n: days }) }));
 
 	/**
 	 * 跨页签的工作区目标集合（分组标题上的「整个工作区」菜单用它）。
 	 *
-	 * 用**未过滤**的三份行算：过滤只影响显示，不该缩小"整个工作区"的范围
+	 * 用**未过滤**的两份行算：过滤只影响显示，不该缩小"整个工作区"的范围
 	 *（与批量操作按整个页签算的语义一致）。`workspaceSummaries` 是纯函数，自检直接单测。
 	 */
-	const summaries = React.useMemo(() => workspaceSummaries(archived, pinned, trashed), [archived, pinned, trashed]);
+	const summaries = React.useMemo(() => workspaceSummaries(archived, pinned), [archived, pinned]);
 
 	/**
 	 * 「复制路径 / 在资源管理器中显示」：两条路都要宿主先算出**绝对路径**
@@ -365,28 +316,26 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 	 * 一行的「⋯」菜单内容。每个页签的动作本来就不同，但**控件形状统一**：
 	 * 都是一行会话 + 一个 ⋯。
 	 *
-	 * 注意已归档那一组的第三项：以前是"永久删除"，可它走的是 `purge`，而 `purge`
-	 * 只认回收站里的目录 —— 归档会话不在回收站，所以那个按钮**从来只会报
-	 * "回收站里没有这个会话"**。现在改成真正可用的"移入回收站"（`trash`：先取消归档
-	 * 再搬走，随时能恢复）。
+	 * 删除项走 `requestDelete` —— 物理删除永远先弹确认框、且要勾"我明白这无法撤销"，
+	 * 这个函数自己绝不打端点。
 	 *
 	 * 正在跑的会话：危险项置 `disabled`（宿主的删除端点那道检查照旧，它才是真正的把关）。
 	 */
 	const rowMenu = (row: PanelRow): RowMenu => {
 		const running = row.active === true;
-		const moveToTrash = {
-			id: "trash",
-			label: t("moveToTrash"),
+		const deleteSession = {
+			id: "delete",
+			label: t("deleteSession"),
 			icon: React.createElement(IconTrashOutlineRegular, { size: 14 }),
 			danger: true,
 			disabled: running
 		};
-		// 定位 / 复制对三个页签都成立（回收站里的目录也还在磁盘上，只是换了个位置）。
+		// 定位 / 复制对两个页签都成立。
 		const locate = [
 			{ id: "copy-path", label: t("copyPath"), icon: React.createElement(IconCopyOutlineRegular, { size: 14 }) },
 			{ id: "reveal", label: t("revealInFolder"), icon: React.createElement(IconFolderOpenRegular, { size: 14 }) }
 		];
-		/** 三个页签共用的"非动作项"（定位 / 复制），单独收一处免得三份菜单各写一遍。 */
+		/** 两个页签共用的"非动作项"（定位 / 复制），单独收一处免得两份菜单各写一遍。 */
 		const handleLocate = (id: string): boolean => {
 			if (id === "copy-path") {
 				void copyRowPath(row.sessionId);
@@ -403,55 +352,27 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 				items: [
 					{ id: "unarchive", label: t("unarchive"), icon: React.createElement(IconUnarchiveOutlineRegular, { size: 14 }) },
 					{ id: "pin", label: t("pin"), icon: React.createElement(IconPinOutlineRegular, { size: 14 }) },
-					moveToTrash,
+					deleteSession,
 					...locate
 				],
 				run: (id) => {
 					setMenuFor(null);
 					if (handleLocate(id)) return;
-					if (id === "trash") requestTrash([row.sessionId], row.title);
+					if (id === "delete") requestDelete([row.sessionId], row.title);
 					else void run(id as MutationEndpoint, [row.sessionId]);
 				}
 			};
 		}
-		if (tab === "pinned") {
-			return {
-				items: [
-					{ id: "unpin", label: t("unpin"), icon: React.createElement(IconPinOutlineRegular, { size: 14 }) },
-					moveToTrash,
-					...locate
-				],
-				run: (id) => {
-					setMenuFor(null);
-					if (handleLocate(id)) return;
-					if (id === "trash") requestTrash([row.sessionId], row.title);
-					else void run(id as MutationEndpoint, [row.sessionId]);
-				}
-			};
-		}
-		// 缺 `__trash.json` 的老条目（`listTrash()` 已经把 `restorable` 算好了）恢复不了：
-		// 端点一定会回"缺少回收站元数据，无法确定原目录"。那就别把「恢复」摆成可点的样子
-		// —— 点下去必然报错是最难解释的一种交互。菜单项本身留着（`disabled` + 换文案），
-		// 让用户知道这条还能永久删除，只是恢复不了。
-		const restorable = row.restorable !== false;
 		return {
 			items: [
-				{
-					id: "restore",
-					label: t(restorable ? "restore" : "restoreUnavailable"),
-					icon: React.createElement(IconRefreshOutlineRegular, { size: 14 }),
-					disabled: !restorable
-				},
-				{ id: "purge", label: t("purge"), icon: React.createElement(IconTrashOutlineRegular, { size: 14 }), danger: true },
+				{ id: "unpin", label: t("unpin"), icon: React.createElement(IconPinOutlineRegular, { size: 14 }) },
+				deleteSession,
 				...locate
 			],
 			run: (id) => {
 				setMenuFor(null);
 				if (handleLocate(id)) return;
-				// `Menu` 对 disabled 项不会回调 `onSelect`，但这里是组件自己的动作入口，
-				// 自检也会直接调它，所以再拦一道：不可恢复就什么都不做。
-				if (id === "restore" && !restorable) return;
-				if (id === "purge") requestPurge([row.sessionId], row.title);
+				if (id === "delete") requestDelete([row.sessionId], row.title);
 				else void run(id as MutationEndpoint, [row.sessionId]);
 			}
 		};
@@ -461,47 +382,36 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 	 * 分组标题上的「整个工作区」动作。
 	 *
 	 * 归档走 `archive`（`stopActivity` 留空：与单行菜单同一条路，正在跑的会话由宿主按活动
-	 * 判据逐项拒绝）；移入回收站先弹确认框（软删除永远先问一次）。
+	 * 判据逐项拒绝）；删除先弹确认框（物理删除永远先问一次，且要勾"我明白这无法撤销"）。
 	 */
 	const runWorkspaceAction = (group: SessionGroup, id: string): void => {
 		setWorkspaceMenuFor(null);
 		const summary = summaries.get(group.key);
 		if (summary === undefined) return;
 		if (id === "archive") void run("archive", summary.archivableIds);
-		if (id === "trash") requestTrash(summary.trashableIds, group.title);
+		if (id === "delete") requestDelete(summary.deletableIds, group.title);
 	};
 
 	const batch: { label: string; variant?: string; disabled?: boolean; run: () => void }[] = [];
 	if (tab === "archived" && selected.length > 0) {
 		batch.push({ label: t("unarchive"), run: () => void run("unarchive", selected) });
 		batch.push({
-			label: t("moveToTrash"),
+			label: t("deleteSession"),
 			variant: "outline",
-			run: () => requestTrash(selected, selectedRows[0] ? selectedRows[0].title : "")
+			run: () => requestDelete(selected, selectedRows[0] ? selectedRows[0].title : "")
 		});
 	}
 	if (tab === "pinned" && selected.length > 0) {
 		batch.push({ label: t("unpin"), run: () => void run("unpin", selected) });
 		batch.push({
-			label: t("moveToTrash"),
+			label: t("deleteSession"),
 			variant: "outline",
-			run: () => requestTrash(selected, selectedRows[0] ? selectedRows[0].title : "")
-		});
-	}
-	if (tab === "trash" && selected.length > 0) {
-		// 整批都缺元数据时「恢复」必定逐项失败（端点只能回"缺少回收站元数据"），
-		// 所以只留「永久删除」可点，与单行的 disabled 语义保持一致。
-		const canRestore = selectedRows.some((row) => row.restorable !== false);
-		batch.push({ label: t("restore"), disabled: !canRestore, run: () => void run("restore", selected) });
-		batch.push({
-			label: t("purge"),
-			variant: "outline",
-			run: () => requestPurge(selected, selectedRows[0] ? selectedRows[0].title : "")
+			run: () => requestDelete(selected, selectedRows[0] ? selectedRows[0].title : "")
 		});
 	}
 
 	const totals = snapshot ? snapshot.totals : null;
-	const totalBytes = tab === "archived" ? (totals ? totals.archivedBytes : 0) : tab === "trash" ? (totals ? totals.trashBytes : 0) : 0;
+	const totalBytes = tab === "archived" && totals ? totals.archivedBytes : 0;
 
 	// 卡片里的显示节点：分组标题 + 行。第一个节点不要上边框（卡片自己有）。
 	const nodes: React.ReactElement[] = [];
@@ -523,8 +433,8 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 					onToggleGroup: () => toggleGroup(group),
 					onToggleCollapse: () => toggleCollapse(key),
 					// 「整个工作区」：跨页签的目标集合由 `workspaceSummaries()` 算好。
-					// "未知目录"那一组也有 key，但它的目标集合可能只含回收站条目 ——
-					// `workspaceActionsOf` 会把两项都置 `disabled`，菜单仍然画得出来（不是坏形状）。
+					// 每个渲染出来的分组都至少有一行，所以 `summary` 一定有值；`workspaceActionsOf`
+					// 再按"有没有在跑的会话"把危险项置 `disabled`。
 					workspaceActions: summary === undefined ? [] : workspaceActionsOf(t, summary),
 					workspaceMenuOpen: workspaceMenuFor === group.key,
 					onToggleWorkspaceMenu: () => setWorkspaceMenuFor(workspaceMenuFor === group.key ? null : group.key),
@@ -544,7 +454,6 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 					busy,
 					showCwd: block.group === null,
 					showMeta: settings.showMeta,
-					showDeletedAt: tab === "trash",
 					checked: selected.includes(row.sessionId),
 					onToggle: () => toggle(row.sessionId),
 					menu: rowMenu(row),
@@ -583,46 +492,9 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 		);
 
 	/**
-	 * 保留策略的预览 + 触发按钮（配置页里"回收站保留天数"那一行的下一行）。
-	 *
-	 * 三种状态各有各的文案：统计中 / 统计失败 / 有可清理的条目（给出条数与体积，按钮可点）。
-	 * 一条都没有时按钮**禁掉** —— 点下去只会得到一个空结果，不如直接说"没有超过 N 天的会话"。
-	 */
-	const retentionCount = trashStats === null ? 0 : trashStats.count;
-	const retentionBytes = trashStats === null ? 0 : trashStats.bytes;
-	const retentionFoot = React.createElement(
-		"div",
-		{ key: "config:trash-preview", style: S.configFoot },
-		trashStatsBusy
-			? React.createElement("span", { style: S.configHint }, t("trashPreviewLoading"))
-			: trashStatsError !== null
-				? React.createElement("span", { style: S.error }, trashStatsError)
-				: React.createElement(
-						"span",
-						{ style: S.configHint },
-						retentionCount > 0
-							? text(t, "trashPreview", { n: retentionCount, size: formatBytes(retentionBytes) })
-							: text(t, "trashPreviewNone", { days: retentionDays })
-					),
-		React.createElement(
-			Button,
-			{
-				size: "sm",
-				variant: "outline",
-				// 自定义天数非法时不给点：这时候 `retentionDays` 回落到档位，点下去删的和看到的
-				// 那行数字对不上（虽然那行也是按档位算的，但用户以为自己填的数生效了）。
-				disabled: busy || trashStatsBusy || retentionCount === 0 || !customDaysValid,
-				onClick: () => requestPurgeOld(retentionDays, retentionCount, retentionBytes)
-			},
-			text(t, "trashCleanup", { n: retentionDays })
-		)
-	);
-
-	/**
 	 * 数据页签上的过滤工具条：搜索框 + 时间档。
 	 *
 	 * 放在页签下面、卡片上面 —— 它筛的是"卡片里显示什么"，跟页签同一层最自然。
-	 * 时间档对回收站页签用的是**删除时间**（回收站里的行没有"最近打开"可言）。
 	 */
 	const filterBar = React.createElement(
 		"div",
@@ -698,8 +570,7 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 					value: settings.tab,
 					options: [
 						{ value: "archived", label: t(TAB_LABEL.archived) },
-						{ value: "pinned", label: t(TAB_LABEL.pinned) },
-						{ value: "trash", label: t(TAB_LABEL.trash) }
+						{ value: "pinned", label: t(TAB_LABEL.pinned) }
 					],
 					label: t("configTab"),
 					onChange: (next: DataTab) => void updateSettings({ tab: next })
@@ -795,39 +666,6 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 					onChange: (next: OrderKey) => void updateSettings({ order: next })
 				})
 			),
-			// ── 回收站保留策略 ──────────────────────────────────────────────
-			// 这条**故意不做成自动清理**：它是本插件唯一不可撤销的动作。这里只让用户选一个
-			// 天数（档位或自定义）并看到预览，真正的删除必须再点一次、再过一道确认弹窗（`purge-old`）。
-			configRow(
-				"config:trash-days",
-				t("configTrashDays"),
-				t("configTrashDaysHint"),
-				React.createElement(
-					"div",
-					{ style: S.retentionDays },
-					React.createElement(Dropdown, {
-						id: "session-curator-trash-days",
-						value: settings.trashDays,
-						options: retentionOptions,
-						label: t("configTrashDays"),
-						// 填了自定义天数时锚点显示"自定义"，否则显示档位 —— 让"现在到底按哪个算"一眼可见。
-						display: customDaysValid && customDays.trim() !== "" ? t("retentionCustom") : undefined,
-						open: openDropdown === "trash-days",
-						onToggle: (next: boolean) => setOpenDropdown(next ? "trash-days" : null),
-						onChange: (next: number) => void updateSettings({ trashDays: next, trashDaysCustom: "" })
-					}),
-					React.createElement(Input, {
-						value: customDays,
-						placeholder: t("customDaysPlaceholder"),
-						"aria-label": t("customDaysLabel"),
-						"aria-invalid": !customDaysValid,
-						title: text(t, "customDaysHint", { min: TRASH_DAYS_MIN, max: TRASH_DAYS_MAX }),
-						style: customDaysValid ? S.customDaysInput : { ...S.customDaysInput, ...S.customDaysInvalid },
-						onChange: (event: { target: { value: string } }) => void updateSettings({ trashDaysCustom: event.target.value })
-					})
-				)
-			),
-			retentionFoot,
 			configRow(
 				"config:auto",
 				t("configAutoUpdate"),
@@ -1021,13 +859,7 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 							? React.createElement(
 									"div",
 									{ style: S.empty },
-									filtering
-										? t("emptyFiltered")
-										: tab === "archived"
-											? t("emptyArchived")
-											: tab === "pinned"
-												? t("emptyPinned")
-												: t("emptyTrash")
+									filtering ? t("emptyFiltered") : tab === "archived" ? t("emptyArchived") : t("emptyPinned")
 								)
 							: React.createElement("div", { style: S.list }, nodes)
 				)
@@ -1060,22 +892,6 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 							action.label
 						)
 					),
-					tab === "trash" && trashed.length > 0
-						? React.createElement(
-								Button,
-								{
-									size: "sm",
-									variant: "outline",
-									disabled: busy,
-									onClick: () =>
-										requestPurge(
-											trashed.map((row) => row.sessionId),
-											""
-										)
-								},
-								t("emptyTrashAll")
-							)
-						: null,
 					busy ? React.createElement("span", { style: S.footer }, t("working")) : null
 				)
 			: null,
@@ -1093,7 +909,7 @@ export function SessionManagerPanel(props: SessionManagerPanelProps): React.Reac
 					filtering ? React.createElement("span", null, text(t, "filtered", { n: filtered.length, total: rows.length })) : null,
 					grouping && groups.length > 0 ? React.createElement("span", null, text(t, "workspaces", { n: groups.length })) : null,
 					selected.length > 0 ? React.createElement("span", null, text(t, "selected", { n: selected.length })) : null,
-					snapshot ? React.createElement("span", { style: S.mono, title: snapshot.trashDir }, snapshot.trashDir) : null
+					snapshot ? React.createElement("span", { style: S.mono, title: snapshot.sessionsDir }, snapshot.sessionsDir) : null
 				)
 			: null
 	);

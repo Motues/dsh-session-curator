@@ -2,7 +2,7 @@
  * 文案表（本地化字典）与 `{name}` 插值。
  *
  * 词表在**客户端**而不是 `locale/*.json`：那两份 JSON 是给插件管理页的卡片元数据用的
- * （DSH 的 app-boot 只读 `meta.title` / `meta.description`），界面文案走 `ctx.locale.register`。
+ *（DSH 的 app-boot 只读 `meta.title` / `meta.description`），界面文案走 `ctx.locale.register`。
  * 本模块**不 import 任何东西**，免得和 settings（要 `DataTab`）绕成环。
  */
 
@@ -14,39 +14,30 @@ export type TFn = (key: string) => string;
 
 const zh: Record<string, string> = {
 	sectionLabel: "会话管理",
-	menuDelete: "删除会话",
+	deleteSession: "删除会话",
 	titleArchived: "已归档",
 	titlePinned: "已置顶",
-	titleTrash: "回收站",
 	refresh: "刷新",
 	loading: "读取中…",
 	retry: "重试",
 	emptyArchived: "还没有归档的会话。在会话行的「⋯」菜单里归档后会出现在这里。",
 	emptyPinned: "没有置顶的会话。",
-	emptyTrash: "回收站是空的。",
 	unarchive: "取消归档",
 	pin: "置顶",
 	unpin: "取消置顶",
-	restore: "恢复",
-	restoreUnavailable: "无法恢复（缺元数据）",
-	purge: "永久删除",
-	moveToTrash: "移入回收站",
 	rowActions: "更多操作",
 	selectAll: "全选",
 	selectNone: "取消选择",
 	selected: "已选 {n} 项",
-	emptyTrashAll: "清空回收站",
 	total: "合计 {n} 个会话 · {size}",
 	working: "处理中…",
 	sessionRunning: "会话正在运行，先停止它再删除。",
-	confirmTrashTitle: "删除会话",
-	confirmTrashBody: "「{title}」会被移到回收站，之后可以在「设置 → 会话管理」里恢复。",
-	confirmTrashAction: "移到回收站",
-	confirmPurgeTitle: "永久删除",
-	confirmPurgeBody: "「{title}」将从回收站永久删除，日志文件会被彻底移除，无法恢复。",
-	confirmPurgeManyBody: "选中的 {n} 个会话将从回收站永久删除，无法恢复。",
-	confirmPurgeAction: "永久删除",
-	ackPurge: "我明白这无法撤销",
+	// 物理删除的确认弹窗（唯一一种弹窗）：正文必须写清"不可恢复"并指路归档。
+	confirmDeleteTitle: "永久删除",
+	confirmDeleteBody: "「{title}」将被永久删除：日志文件会从磁盘上彻底移除，无法恢复。如果想以后还能找回，请改用「归档」。",
+	confirmDeleteManyBody: "选中的 {n} 个会话将被永久删除：日志文件会从磁盘上彻底移除，无法恢复。如果想以后还能找回，请改用「归档」。",
+	confirmDeleteAction: "永久删除",
+	ackDelete: "我明白这无法撤销",
 	cancel: "取消",
 	close: "关闭",
 	noProject: "（未知目录）",
@@ -66,7 +57,7 @@ const zh: Record<string, string> = {
 	workspaceActions: "整个工作区",
 	workspaceMenu: "工作区操作",
 	archiveWorkspace: "整个工作区归档",
-	trashWorkspace: "整个工作区移入回收站",
+	deleteWorkspace: "整个工作区删除",
 	workspaceRunningHint: "这个工作区里有会话正在运行，危险动作已禁用",
 	// 运行中徽标（宿主用官方的 workspace/session-activity 判定）。
 	running: "运行中",
@@ -80,14 +71,13 @@ const zh: Record<string, string> = {
 	// 磁盘占用视图。
 	titleUsage: "磁盘占用",
 	usageTitle: "磁盘占用",
-	usageTotal: "共 {n} 个会话 · {size}（磁盘上 {disk} 个）",
+	usageTotal: "共 {n} 个会话 · {size}",
 	usageByWorkspace: "按工作区",
 	usageLargest: "最占地方的会话",
 	usageOldest: "最久没打开的会话",
 	usageLoading: "正在统计…",
 	usageArchived: "已归档",
 	usagePinned: "已置顶",
-	usageTrashed: "在回收站",
 	usageSuggestArchive: "建议归档",
 	usageArchive: "归档",
 	usageUnarchive: "取消归档",
@@ -110,12 +100,11 @@ const zh: Record<string, string> = {
 	configMeta: "行内显示体积与文件数",
 	configMetaHint: "关掉后每行只留标题（平铺时仍会显示文件夹）",
 	configOrder: "排序",
-	configOrderHint: "原顺序就是宿主给的顺序（回收站里是最近删除在前）",
+	configOrderHint: "原顺序就是宿主给的顺序",
 	orderHost: "原顺序",
 	orderTitle: "标题",
 	orderBytes: "体积",
 	orderCreatedAt: "创建时间",
-	orderDeletedAt: "删除时间",
 	// 搜索与过滤（只影响显示；批量操作与计数仍按整个页签算）。
 	searchLabel: "搜索会话",
 	searchPlaceholder: "搜索标题或目录…",
@@ -125,22 +114,6 @@ const zh: Record<string, string> = {
 	timeRecent: "最近 7 天",
 	filtered: "已过滤出 {n} 个会话（共 {total} 个）",
 	emptyFiltered: "没有符合搜索条件的会话。",
-	// 回收站保留策略（永久删除：永远先预览、再确认，绝不自动后台清理）。
-	configTrashDays: "回收站保留天数",
-	configTrashDaysHint: "「清理 N 天前」按这个天数算；不会自动执行，每次都要先看预览再确认",
-	retentionDays: "{n} 天",
-	retentionCustom: "自定义",
-	customDaysPlaceholder: "天数",
-	customDaysLabel: "自定义保留天数",
-	customDaysHint: "填 {min}–{max} 之间的整数；留空就用上面的档位",
-	customDaysInvalid: "天数要在 {min}–{max} 之间",
-	trashCleanup: "删除 {n} 天前的会话",
-	trashPreview: "将删除 {n} 个会话 · {size}",
-	trashPreviewNone: "没有超过 {days} 天的会话",
-	trashPreviewLoading: "正在统计…",
-	confirmPurgeOldTitle: "清理旧会话",
-	confirmPurgeOldBody: "将永久删除 {n} 个在 {days} 天前移入回收站的会话（{size}），无法恢复。",
-	ackPurgeOld: "我明白这无法撤销",
 	configAutoUpdate: "自动检查更新",
 	configAutoUpdateHint: "打开这个页面时问一次 npm registry（10 分钟内有缓存）",
 	configReset: "恢复默认",
@@ -162,51 +135,37 @@ const zh: Record<string, string> = {
 	hoverStats: "{size} · {n} 个文件",
 	hoverCwd: "原目录",
 	hoverArchived: "已归档",
-	hoverPinned: "已置顶",
-	hoverTrashed: "在回收站",
-	hoverDeleted: "删除于",
-	// 删除成功后的撤销提示（`Toast`）。
-	toastTrashed: "「{title}」已移入回收站",
-	toastTrashedMany: "{n} 个会话已移入回收站",
-	toastUndo: "撤销",
-	toastUndoFailed: "撤销失败：{reason}"
+	hoverPinned: "已置顶"
 };
 
 const en: Record<string, string> = {
 	sectionLabel: "Session manager",
-	menuDelete: "Delete session",
+	deleteSession: "Delete session",
 	titleArchived: "Archived",
 	titlePinned: "Pinned",
-	titleTrash: "Trash",
 	refresh: "Refresh",
 	loading: "Loading…",
 	retry: "Retry",
 	emptyArchived: "No archived sessions yet. Archive one from its “⋯” menu and it shows up here.",
 	emptyPinned: "No pinned sessions.",
-	emptyTrash: "The trash is empty.",
 	unarchive: "Unarchive",
 	pin: "Pin",
 	unpin: "Unpin",
-	restore: "Restore",
-	restoreUnavailable: "Cannot restore (no metadata)",
-	purge: "Delete permanently",
-	moveToTrash: "Move to trash",
 	rowActions: "More actions",
 	selectAll: "Select all",
 	selectNone: "Clear selection",
 	selected: "{n} selected",
-	emptyTrashAll: "Empty trash",
 	total: "{n} sessions · {size}",
 	working: "Working…",
 	sessionRunning: "This session is running; stop it before deleting.",
-	confirmTrashTitle: "Delete session",
-	confirmTrashBody: "“{title}” moves to the trash. You can restore it later under Settings → Session manager.",
-	confirmTrashAction: "Move to trash",
-	confirmPurgeTitle: "Delete permanently",
-	confirmPurgeBody: "“{title}” is removed from the trash for good; its log files are gone and cannot be recovered.",
-	confirmPurgeManyBody: "{n} selected sessions are removed from the trash for good and cannot be recovered.",
-	confirmPurgeAction: "Delete permanently",
-	ackPurge: "I understand this cannot be undone",
+	// The one confirmation dialog: it must spell out "permanent" and point at archiving instead.
+	confirmDeleteTitle: "Delete permanently",
+	confirmDeleteBody:
+		"“{title}” is deleted permanently: its log files are removed from disk for good and cannot be recovered. If you want to be able to bring it back later, use Archive instead.",
+	confirmDeleteManyBody:
+		"{n} selected sessions are deleted permanently: their log files are removed from disk for good and cannot be recovered. If you want to be able to bring them back later, use Archive instead.",
+	confirmDeleteAction: "Delete permanently",
+	ackDelete: "I understand this cannot be undone",
 	cancel: "Cancel",
 	close: "Close",
 	noProject: "(unknown directory)",
@@ -227,7 +186,7 @@ const en: Record<string, string> = {
 	workspaceActions: "Whole workspace",
 	workspaceMenu: "Workspace actions",
 	archiveWorkspace: "Archive this whole workspace",
-	trashWorkspace: "Move this whole workspace to the trash",
+	deleteWorkspace: "Delete this whole workspace",
 	workspaceRunningHint: "A session in this workspace is running, so the destructive actions are off",
 	// Running badge (the host asks the official workspace/session-activity hook).
 	running: "Running",
@@ -241,14 +200,13 @@ const en: Record<string, string> = {
 	// Disk usage view.
 	titleUsage: "Disk usage",
 	usageTitle: "Disk usage",
-	usageTotal: "{n} sessions · {size} ({disk} on disk)",
+	usageTotal: "{n} sessions · {size}",
 	usageByWorkspace: "By workspace",
 	usageLargest: "Largest sessions",
 	usageOldest: "Least recently opened",
 	usageLoading: "Measuring…",
 	usageArchived: "Archived",
 	usagePinned: "Pinned",
-	usageTrashed: "In trash",
 	usageSuggestArchive: "Archive suggested",
 	usageArchive: "Archive",
 	usageUnarchive: "Unarchive",
@@ -271,12 +229,11 @@ const en: Record<string, string> = {
 	configMeta: "Show size and file count per row",
 	configMetaHint: "Off leaves only the title (the folder still shows in the flat list)",
 	configOrder: "Order",
-	configOrderHint: "Host order is what the host sent (the trash is most-recently-deleted first)",
+	configOrderHint: "Host order is what the host sent",
 	orderHost: "Host",
 	orderTitle: "Title",
 	orderBytes: "Size",
 	orderCreatedAt: "Created",
-	orderDeletedAt: "Deleted",
 	// Search and filtering (display only; batch actions and counts still cover the whole tab).
 	searchLabel: "Search sessions",
 	searchPlaceholder: "Search title or folder…",
@@ -286,23 +243,6 @@ const en: Record<string, string> = {
 	timeRecent: "Last 7 days",
 	filtered: "{n} of {total} sessions match",
 	emptyFiltered: "No session matches the search.",
-	// Trash retention (permanent deletion: always preview, then confirm; never automatic).
-	configTrashDays: "Trash retention",
-	configTrashDaysHint:
-		"How “clean up N days ago” counts the days; it never runs on its own — every cleanup needs a preview and a confirmation",
-	retentionDays: "{n} days",
-	retentionCustom: "Custom",
-	customDaysPlaceholder: "Days",
-	customDaysLabel: "Custom retention days",
-	customDaysHint: "An integer between {min} and {max}; leave it empty to use the preset above",
-	customDaysInvalid: "Days must be between {min} and {max}",
-	trashCleanup: "Delete sessions older than {n} days",
-	trashPreview: "{n} sessions · {size} will be deleted",
-	trashPreviewNone: "Nothing is older than {days} days",
-	trashPreviewLoading: "Counting…",
-	confirmPurgeOldTitle: "Clean up old sessions",
-	confirmPurgeOldBody: "{n} sessions moved to the trash more than {days} days ago ({size}) are deleted for good and cannot be recovered.",
-	ackPurgeOld: "I understand this cannot be undone",
 	configAutoUpdate: "Check for updates automatically",
 	configAutoUpdateHint: "Asks the npm registry when this page opens (cached for 10 minutes)",
 	configReset: "Reset to defaults",
@@ -324,14 +264,7 @@ const en: Record<string, string> = {
 	hoverStats: "{size} · {n} files",
 	hoverCwd: "Folder",
 	hoverArchived: "Archived",
-	hoverPinned: "Pinned",
-	hoverTrashed: "In trash",
-	hoverDeleted: "Deleted",
-	// Undo notice after a successful delete (`Toast`).
-	toastTrashed: "“{title}” moved to the trash",
-	toastTrashedMany: "{n} sessions moved to the trash",
-	toastUndo: "Undo",
-	toastUndoFailed: "Undo failed: {reason}"
+	hoverPinned: "Pinned"
 };
 
 export const dictionaries: Record<string, Record<string, string>> = { zh, en };
@@ -346,8 +279,7 @@ export function text(t: TFn, key: string, params?: Record<string, string | numbe
 }
 
 /** 页签 id → 文案 key（面板与自检都按这份映射取标题）。 */
-export const TAB_LABEL: Record<"archived" | "pinned" | "trash", string> = {
+export const TAB_LABEL: Record<"archived" | "pinned", string> = {
 	archived: "titleArchived",
-	pinned: "titlePinned",
-	trash: "titleTrash"
+	pinned: "titlePinned"
 };

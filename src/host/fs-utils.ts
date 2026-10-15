@@ -1,6 +1,6 @@
 /** 文件系统小工具 + 错误消息归一化。 */
 import { promises as fsp } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 /** 任何抛出物 → 一句人话（宿主 logger 与端点错误信封都用它）。 */
 export function messageOf(error: unknown): string {
@@ -32,19 +32,6 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, worker:
 	return results;
 }
 
-/** 跨卷 rename 会抛 EXDEV，退回 copy + rm。 */
-export async function moveDir(from: string, to: string): Promise<void> {
-	await fsp.mkdir(dirname(to), { recursive: true });
-	try {
-		await fsp.rename(from, to);
-		return;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException | null)?.code !== "EXDEV") throw error;
-	}
-	await fsp.cp(from, to, { recursive: true, force: true });
-	await fsp.rm(from, { recursive: true, force: true });
-}
-
 export interface DirStats {
 	bytes: number;
 	files: number;
@@ -53,7 +40,7 @@ export interface DirStats {
 /**
  * 体积统计的**模块级缓存**：`目录 → { mtime, bytes, files }`。
  *
- * 为什么要缓存：一次快照要对每个归档 / 置顶 / 回收站会话做一次目录遍历（`readdir` +
+ * 为什么要缓存：一次快照要对每个归档 / 置顶会话做一次目录遍历（`readdir` +
  * 每条目一次 `stat`），而快照在每次变更、每次刷新、每次切页签后都会重算 —— 同一个目录
  * 在一次会话里会被反复统计，内容却根本没变。
  *

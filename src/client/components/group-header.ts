@@ -6,7 +6,7 @@
  * 折叠状态由面板算好传进来（默认折叠 / 展开与手动覆盖的规则见 `groups.ts`）。
  *
  * 「整个工作区」那一个菜单是这个槽位唯一**跨页签**的入口：当前页签里只显示这个工作区的
- * 一部分会话（归档 / 置顶 / 回收站各一页），而"把这个项目整个收拾掉"要一次覆盖三边 ——
+ * 一部分会话（归档 / 置顶各一页），而"把这个项目整个收拾掉"要一次覆盖两边 ——
  * 目标集合由面板算好（见 `groups.ts` 的 `workspaceSummaries`），这里只画菜单。
  */
 import * as React from "react";
@@ -140,11 +140,11 @@ export function workspaceActionsOf(t: TFn, summary: WorkspaceSummary): Workspace
 			disabled: summary.archivableIds.length === 0 || summary.activeIds.length > 0
 		},
 		{
-			id: "trash",
-			label: t("trashWorkspace"),
+			id: "delete",
+			label: t("deleteWorkspace"),
 			icon: React.createElement(IconTrashOutlineRegular, { size: 14 }),
 			danger: true,
-			disabled: summary.trashableIds.length === 0 || summary.activeIds.length > 0
+			disabled: summary.deletableIds.length === 0 || summary.activeIds.length > 0
 		}
 	];
 }

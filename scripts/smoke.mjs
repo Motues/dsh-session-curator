@@ -15,13 +15,13 @@
  * （`transport failure for /session-manager/trash: HTTP 405`）。
  * 谁把实现改回 `rpc.handle`，这里就会当场崩掉。
  *
- * `snapshot` 会真实读取 `<DSH_HOME>`（会话目录、投影缓存、回收站），所以这条路径上的
+ * `snapshot` 会真实读取 `<DSH_HOME>`（会话目录、投影缓存），所以这条路径上的
  * 扫描、标题/cwd 投影、体积统计、错误信封与入参归一化都会被覆盖。
  *
  * 最后一段换到**临时 DSH_HOME**，用一个按 `dsh-workspace` 真实语义最小化实现的假 registry
- * 真跑一遍 `trash` / `restore` / `purge`，断言的是"删除之后会话必须从侧边栏消失、且只能
- * 出现在回收站页签"：那正是"移入回收站后侧边栏未分组里还在、归档页签里也还在"的回归测试
- * （判定规则逐字照抄 `dsh-client-ui-workspace` 的 `groupByWorkspace()`）。
+ * 真跑一遍 `delete`（物理删除），断言的是"删除之后会话目录必须真的没了，而且归档 / 置顶 /
+ * 工作区三处记账也必须清干净"——后者是"删掉之后 archivedSessionIds 里还留着 id、DSH 一直
+ * 以为它归档着"那种永久幽灵的回归测试。
  *
  * 用法：`node scripts/smoke.mjs`（可用 `DSH_HOME` 指定别的 home）。
  */
@@ -29,7 +29,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { apply, compareVersions, dirStats, forgetDirStats, inject, insideRoot, isExpired, name, retentionCutoff } from "../lib/index.js";
+import { apply, compareVersions, dirStats, forgetDirStats, inject, insideRoot, name } from "../lib/index.js";
 
 function dshHome() {
 	const configured = process.env.DSH_HOME;
@@ -76,22 +76,7 @@ const registry = {
 // ── 假 ctx：只有 Connection 公布的 Fetch 注册面 ───────────────────────────
 const CHANNEL_PATH = "/api/session-curator";
 const METHOD_PREFIX = "session-curator";
-const EXPECTED_ENDPOINTS = [
-	"snapshot",
-	"describe",
-	"archive",
-	"unarchive",
-	"pin",
-	"unpin",
-	"trash",
-	"restore",
-	"purge",
-	"trash-stats",
-	"purge-older-than",
-	"usage",
-	"open",
-	"check-update"
-];
+const EXPECTED_ENDPOINTS = ["snapshot", "describe", "archive", "unarchive", "pin", "unpin", "delete", "usage", "open", "check-update"];
 
 const routes = new Map();
 const disposers = [];
@@ -176,21 +161,15 @@ if (!snapshot.ok) process.exit(1);
 const value = snapshot.value;
 check(
 	"snapshot shape",
-	["dshHome", "version", "trashDir", "sessionsDir", "archived", "pinned", "trashed", "totals"].every((key) => key in value)
+	["dshHome", "version", "sessionsDir", "archived", "pinned", "totals"].every((key) => key in value)
 );
 check(
 	"snapshot reports the package version (config page shows it as v…)",
 	value.version === JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version,
 	String(value.version)
 );
-check(
-	"trash lives under storages/session-manager",
-	value.trashDir.replace(/\\/g, "/").endsWith("/storages/session-manager/trash"),
-	value.trashDir
-);
-const trashedIds = new Set(value.trashed.map((row) => row.sessionId));
-// 期望集合 = 归档集合 ∩ 磁盘上真实存在 ∖ 回收站：`archivedSessionIds` 是只增不减的记账，
-// 目录已经不在（或被我们搬进回收站）的 id 不该再出现在"已归档"页签里。
+// 期望集合 = 归档集合 ∩ 磁盘上真实存在：`archivedSessionIds` 是只增不减的记账，
+// 目录已经不在的 id 不该再出现在"已归档"页签里。
 const onDiskIds = new Set();
 for (const slug of await readdir(join(home, "sessions"), { withFileTypes: true }).catch(() => [])) {
 	if (!slug.isDirectory()) continue;
@@ -198,22 +177,11 @@ for (const slug of await readdir(join(home, "sessions"), { withFileTypes: true }
 		if (entry.isDirectory()) onDiskIds.add(entry.name);
 	}
 }
-const expectedArchived = registry.archivedSessionIds.filter((id) => onDiskIds.has(id) && !trashedIds.has(id));
+const expectedArchived = registry.archivedSessionIds.filter((id) => onDiskIds.has(id));
 check(
-	"archived rows are exactly the archived ids still on disk, minus the trash",
+	"archived rows are exactly the archived ids still on disk",
 	value.archived.length === expectedArchived.length && value.archived.every((row) => expectedArchived.includes(row.sessionId)),
 	`${value.archived.length} rows (expected ${expectedArchived.length}), ${value.totals.archivedBytes} B`
-);
-// 回归：回收站条目**只**归回收站页签。删除时 id 会故意留在归档集合里（那是 DSH 唯一
-// "从所有分组面消失"的机制），所以这里必须有过滤，否则同一会话会同时出现在两个页签，
-// 而"已归档"那条还是 `onDisk:false` 的幽灵行（本机真实数据踩过 5 次）。
-check(
-	"no trashed session is also listed as archived",
-	value.archived.every((row) => !trashedIds.has(row.sessionId)),
-	value.archived
-		.filter((row) => trashedIds.has(row.sessionId))
-		.map((row) => row.sessionId)
-		.join(", ") || undefined
 );
 check(
 	"every archived row resolved its on-disk directory",
@@ -236,7 +204,7 @@ for (const row of value.archived) {
 console.log("");
 
 // ── 坏信封：一律 200 + 错误信封（跟 Connection 自己一致） ────────────────
-const mismatched = await invoke("snapshot", {}, { method: "session-curator/restore" });
+const mismatched = await invoke("snapshot", {}, { method: "session-curator/delete" });
 check(
 	"method mismatch is rejected inside the envelope",
 	mismatched.ok === false && mismatched.error.code === "session-curator/bad-request",
@@ -262,9 +230,9 @@ check(
 );
 
 // ── 逐项语义 ─────────────────────────────────────────────────────────────
-const missing = await invoke("purge", { ids: ["session-does-not-exist"] });
+const missing = await invoke("delete", { ids: ["session-does-not-exist"] });
 check(
-	"missing trash entry reports a per-item failure",
+	"deleting an unknown session reports a per-item failure",
 	missing.ok === true && missing.value.results.length === 1 && missing.value.results[0].ok === false,
 	JSON.stringify(missing.value.results)
 );
@@ -272,7 +240,7 @@ check(
 const malformed = await invoke("unarchive", { ids: "not-an-array" });
 check("malformed ids normalize to an empty list", malformed.value.results.length === 0);
 
-const noIds = await invoke("restore", {});
+const noIds = await invoke("delete", {});
 check("missing ids is not an error", noIds.ok === true && noIds.value.results.length === 0);
 
 // ── 版本比较：决定配置页要不要弹"有新版本" ──────────────────────────────
@@ -288,30 +256,6 @@ check(
 	compareVersions("0.1.0-rc.1", "0.1.0") === -1 && compareVersions("0.1.0", "0.1.0-rc.1") === 1
 );
 check("a lower version never looks like an upgrade", compareVersions("0.0.9", "0.1.0") === -1);
-
-// ── 保留策略的判据（纯函数）：预览与真删共用同一份规则 ────────────────────
-const DAY_MS = 24 * 60 * 60 * 1000;
-const nowish = Date.now();
-check(
-	"the cutoff is `now - days` and never degenerates into `now`",
-	Math.abs(nowish - 30 * DAY_MS - retentionCutoff(30)) < 5000 &&
-		retentionCutoff(0) < nowish - 0.9 * DAY_MS &&
-		retentionCutoff(Number.NaN) < nowish - 0.9 * DAY_MS &&
-		retentionCutoff(1e9) > nowish - 3651 * DAY_MS,
-	`30d=${new Date(retentionCutoff(30)).toISOString()} 0d=${new Date(retentionCutoff(0)).toISOString()}`
-);
-// `isExpired(row, cutoff)` 是**纯**判定：截止时间由调用方算好传进来（预览与真删各自
-// `retentionCutoff(days)` 一次），所以这里的边界值可以贴着 cutoff 构造，不会有抖动。
-const cutoff = retentionCutoff(30);
-const trashRow = (sessionId, deletedAt, restorable) => ({ sessionId, deletedAt, restorable });
-check(
-	"only entries with a deletion time, a restore slug and an age past the cutoff count as expired",
-	isExpired(trashRow("old", cutoff - DAY_MS, true), cutoff) === true &&
-		isExpired(trashRow("fresh", cutoff + DAY_MS, true), cutoff) === false &&
-		isExpired(trashRow("no-time", 0, true), cutoff) === false &&
-		isExpired(trashRow("no-slug", cutoff - DAY_MS, false), cutoff) === false,
-	`old=${isExpired(trashRow("old", cutoff - DAY_MS, true), cutoff)} fresh=${isExpired(trashRow("fresh", cutoff + DAY_MS, true), cutoff)} noTime=${isExpired(trashRow("no-time", 0, true), cutoff)} noSlug=${isExpired(trashRow("no-slug", cutoff - DAY_MS, false), cutoff)}`
-);
 
 // ── 性能：体积统计按目录 mtime 缓存（同一次快照内重复访问不再遍历） ───────
 // `dirStats()` 只吃一个绝对路径，所以这一段**不需要**换 DSH_HOME。
@@ -357,27 +301,30 @@ try {
 	await rm(statsHome, { recursive: true, force: true });
 }
 
-// ── 软删除语义：会话要被"藏起来"，而且只出现在回收站页签 ─────────────────
+// ── 物理删除语义：目录必须真的没了，三处记账必须清干净 ───────────────────
 // 这一段用**临时 DSH_HOME**（插件每次解析 home 都读 process.env.DSH_HOME），
-// 所以可以真实地搬目录、恢复、永久删除，绝不碰真实数据。
-console.log("\n── 软删除语义（临时 DSH_HOME） ──");
+console.log("\n── 物理删除语义（临时 DSH_HOME） ──");
 const realHome = process.env.DSH_HOME;
+const realSessionId = process.env.DSH_SESSION_ID;
 const tempHome = await mkdtemp(join(tmpdir(), "dsh-curator-smoke-"));
 const SLUG = "--C-Data-Smoke--";
 const SMOKE_CWD = "C:\\Data\\Smoke";
 const ARCHIVED = "session-smoke-archived";
 const ORDINARY = "session-smoke-ordinary";
-const DOOMED = "session-smoke-doomed";
+const PINNED = "session-smoke-pinned";
+const RUNNING = "session-smoke-running";
+const CURRENT = "session-smoke-current";
 
 /**
  * 侧边栏归属判定 —— 逐字照抄 `@deepseek-ai/dsh-client-ui-workspace` 的
  * `groupByWorkspace()`：客户端 list 里认得、且不属于任何工作区、且**不在归档集合**里的会话，
- * 会被收进 **未分组**（locale key `group.ungrouped`）。那就是用户看到的那条幽灵行。
+ * 会被收进 **未分组**（locale key `group.ungrouped`）。
+ *
+ * 物理删除之后这个判定只用来验证"记账清干净了"：目录已经删掉，而客户端那份 list 是旧快照
+ * （插件拿不到它的写接口），所以这里只断言归档集合与工作区记账都不再包含它。
  */
 function sidebarBucket(sessionId, clientList, workspaces, archived) {
 	if (!clientList.includes(sessionId)) return "absent";
-	// 顺序照抄真实实现：先 `sessionVisible()`（默认过滤里归档会话一律不渲染，**哪怕它
-	// 还挂在某个工作区名下** —— 归档不动记账），再决定它落在哪个分组里。
 	if (archived.includes(sessionId)) return "archived";
 	if (workspaces.some((workspace) => workspace.sessionIds.includes(sessionId))) return "workspace";
 	return "ungrouped";
@@ -422,8 +369,13 @@ function fakeRegistry(sessionIds) {
 	};
 }
 
-/** 再挂一个插件实例（自己的路由表 + 自己的假 registry），路由仍走真实 Request。 */
-function mount(registry) {
+/**
+ * 再挂一个插件实例（自己的路由表 + 自己的假 registry），路由仍走真实 Request。
+ *
+ * `activeIds` 里的会话在 `workspace/session-activity` 上被报成"正在跑"：删除端点必须
+ * 逐项拒绝它（与官方归档同一条活动判据）。
+ */
+function mount(registry, activeIds = []) {
 	const localRoutes = new Map();
 	const localDisposers = [];
 	apply({
@@ -443,7 +395,7 @@ function mount(registry) {
 			if (typeof dispose === "function") localDisposers.push(dispose);
 			return dispose;
 		},
-		waterfall: async () => [],
+		waterfall: async (name, payload) => (activeIds.includes(payload.sessionId) ? [{ id: "run" }] : []),
 		logger: { warn: () => {} }
 	});
 	return { disposers: localDisposers, invoke: invokerFor(localRoutes) };
@@ -460,25 +412,29 @@ async function seedSession(sessionId, title) {
 	);
 }
 
-const trashDirOf = (sessionId) => join(tempHome, "storages", "session-manager", "trash", sessionId);
-const trashMetaOf = async (sessionId) => JSON.parse(await readFile(join(trashDirOf(sessionId), "__trash.json"), "utf8"));
+const sessionDirOf = (sessionId) => join(tempHome, "sessions", SLUG, sessionId);
+const projCacheOf = (sessionId) => join(tempHome, "storages", "session_projcache", "sessions", `${sessionId}.json`);
 
 try {
 	process.env.DSH_HOME = tempHome;
 	await seedSession(ARCHIVED, "已归档的会话");
 	await seedSession(ORDINARY, "普通会话");
-	await seedSession(DOOMED, "待永久删除");
+	await seedSession(PINNED, "置顶的会话");
+	await seedSession(RUNNING, "运行中的会话");
+	await seedSession(CURRENT, "当前使用的会话");
 
-	const registry2 = fakeRegistry([ARCHIVED, ORDINARY, DOOMED]);
+	const registry2 = fakeRegistry([ARCHIVED, ORDINARY, PINNED, RUNNING, CURRENT]);
 	registry2.archivedSessionIds = [ARCHIVED];
-	const plugin = mount(registry2);
-	// 客户端那份会话列表是实时快照：我们把目录搬走，它也不会自己掉 —— 三条都还在。
-	const clientList = [ARCHIVED, ORDINARY, DOOMED];
+	registry2.pinnedSessionIds = [PINNED];
+	const plugin = mount(registry2, [RUNNING]);
+	// 客户端那份会话列表是实时快照：目录删了它也不会自己掉 —— 五条都还在（这就是下面
+	// 只断言"记账里没有它"、而不断言"侧边栏里没有它"的原因）。
+	const clientList = [ARCHIVED, ORDINARY, PINNED, RUNNING, CURRENT];
 	const bucketOf = (sessionId) => sidebarBucket(sessionId, clientList, registry2.workspaces, registry2.archivedSessionIds);
 
 	check("an archived session is hidden from the sidebar beforehand", bucketOf(ARCHIVED) === "archived", bucketOf(ARCHIVED));
 
-	// ── describe（第十个端点）：单个会话的事实，侧边栏 hover 卡片的数据源 ──────
+	// ── describe：单个会话的事实，侧边栏 hover 卡片的数据源 ───────────────
 	const described = await plugin.invoke("describe", { ids: [ORDINARY] });
 	check(
 		"describe reports one on-disk session with its stats",
@@ -489,9 +445,7 @@ try {
 			described.value.slug === SLUG &&
 			described.value.bytes > 0 &&
 			described.value.files === 1 &&
-			described.value.onDisk === true &&
-			described.value.trashed === false &&
-			described.value.deletedAt === null,
+			described.value.onDisk === true,
 		JSON.stringify(described.value ?? described.error)
 	);
 	check(
@@ -511,180 +465,96 @@ try {
 	const noDetailId = await plugin.invoke("describe", {});
 	check("describe without ids is an envelope error, not a crash", noDetailId.ok === false, JSON.stringify(noDetailId.error));
 
-	const trashedArchived = await plugin.invoke("trash", { ids: [ARCHIVED] });
-	const archivedSteps = trashedArchived.value.results[0]?.steps ?? [];
+	// ── 删除一个"已归档"的会话：归档记账 + 工作区记账 + 目录 + 投影缓存都要清 ──
+	const deletedArchived = await plugin.invoke("delete", { ids: [ARCHIVED] });
+	const archivedSteps = deletedArchived.value.results[0]?.steps ?? [];
 	check(
-		"trashing an archived session succeeds",
-		trashedArchived.value.results[0]?.ok === true,
-		JSON.stringify(trashedArchived.value.results[0])
+		"deleting an archived session succeeds",
+		deletedArchived.value.results[0]?.ok === true,
+		JSON.stringify(deletedArchived.value.results[0])
 	);
-	check("it is NOT unarchived on the way in (the old bug)", !archivedSteps.includes("unarchive"), `steps=[${archivedSteps.join(",")}]`);
+	check("it is unarchived first (no permanent ghost id)", archivedSteps.includes("unarchive"), `steps=[${archivedSteps.join(",")}]`);
 	check(
-		"it stays archived, so DSH keeps hiding it",
-		registry2.archivedSessionIds.includes(ARCHIVED),
+		"the archive bookkeeping drops the id",
+		!registry2.archivedSessionIds.includes(ARCHIVED),
 		`archived=[${registry2.archivedSessionIds.join(",")}]`
 	);
-	check("the sidebar does not gain an Ungrouped ghost row", bucketOf(ARCHIVED) === "archived", bucketOf(ARCHIVED));
+	check("the archived session is no longer treated as hidden", bucketOf(ARCHIVED) !== "archived", bucketOf(ARCHIVED));
 	check(
-		"its directory really moved into the trash",
-		!existsSync(join(tempHome, "sessions", SLUG, ARCHIVED)) && existsSync(join(trashDirOf(ARCHIVED), "session.jsonl"))
-	);
-	check(
-		"__trash.json records wasArchived: true",
-		(await trashMetaOf(ARCHIVED)).wasArchived === true,
-		JSON.stringify(await trashMetaOf(ARCHIVED))
-	);
-	check("snapshot.archived drops it (no phantom row)", !trashedArchived.value.archived.some((row) => row.sessionId === ARCHIVED));
-	check(
-		"snapshot.trashed lists it",
-		trashedArchived.value.trashed.some((row) => row.sessionId === ARCHIVED)
-	);
-
-	await plugin.invoke("trash", { ids: [ORDINARY] });
-	check(
-		"an ordinary session is archived on the way in (otherwise it lands in Ungrouped)",
-		registry2.archivedSessionIds.includes(ORDINARY) && bucketOf(ORDINARY) === "archived",
-		`archived=[${registry2.archivedSessionIds.join(",")}] bucket=${bucketOf(ORDINARY)}`
-	);
-	check("__trash.json records wasArchived: false", (await trashMetaOf(ORDINARY)).wasArchived === false);
-
-	// describe 对回收站条目的形状：状态、删除时间、能不能恢复 —— hover 卡片与
-	// 设置面板的「恢复」禁用（`restorable`）用的都是这几个字段。
-	const describedTrashed = await plugin.invoke("describe", { ids: [ORDINARY] });
-	check(
-		"describe reports a trashed session with its deletion time and restorable flag",
-		describedTrashed.ok === true &&
-			describedTrashed.value.trashed === true &&
-			describedTrashed.value.onDisk === false &&
-			describedTrashed.value.restorable === true &&
-			describedTrashed.value.slug === SLUG &&
-			typeof describedTrashed.value.deletedAt === "number" &&
-			describedTrashed.value.deletedAt > 0,
-		JSON.stringify(describedTrashed.value ?? describedTrashed.error)
-	);
-
-	const restoredOrdinary = await plugin.invoke("restore", { ids: [ORDINARY] });
-	check(
-		"restoring an ordinary session unarchives it again",
-		!registry2.archivedSessionIds.includes(ORDINARY),
-		JSON.stringify(restoredOrdinary.value.results[0])
-	);
-	check(
-		"restoring re-attaches it to its original workspace",
-		registry2.workspaces[0].sessionIds.includes(ORDINARY),
+		"the workspace bookkeeping drops the id too",
+		!registry2.workspaces[0].sessionIds.includes(ARCHIVED),
 		registry2.workspaces[0].sessionIds.join(",")
 	);
+	check("its directory is really gone from disk", !existsSync(sessionDirOf(ARCHIVED)));
+	check("its projection cache is gone too", !existsSync(projCacheOf(ARCHIVED)));
+	check(
+		"the snapshot no longer lists it anywhere",
+		!deletedArchived.value.archived.some((row) => row.sessionId === ARCHIVED) &&
+			!deletedArchived.value.pinned.some((row) => row.sessionId === ARCHIVED)
+	);
+	check("describing it afterwards fails like any unknown id", (await plugin.invoke("describe", { ids: [ARCHIVED] })).ok === false);
 
-	await plugin.invoke("restore", { ids: [ARCHIVED] });
-	check("restoring a previously archived session keeps it archived", registry2.archivedSessionIds.includes(ARCHIVED));
-	check("and it is back on disk under its original slug", existsSync(join(tempHome, "sessions", SLUG, ARCHIVED)));
+	// ── 删除一个置顶的普通会话：取消置顶 + 删目录 ─────────────────────────
+	const deletedPinned = await plugin.invoke("delete", { ids: [PINNED] });
+	const pinnedSteps = deletedPinned.value.results[0]?.steps ?? [];
 	check(
-		"both restored sessions stay out of Ungrouped",
-		[ARCHIVED, ORDINARY].every((id) => bucketOf(id) !== "ungrouped"),
-		`${bucketOf(ARCHIVED)}, ${bucketOf(ORDINARY)}`
+		"deleting a pinned session succeeds and unpins it first",
+		deletedPinned.value.results[0]?.ok === true && pinnedSteps.includes("unpin"),
+		`steps=[${pinnedSteps.join(",")}]`
 	);
+	check("the pin bookkeeping drops the id", !registry2.pinnedSessionIds.includes(PINNED), registry2.pinnedSessionIds.join(","));
+	check("the pinned session's directory is gone", !existsSync(sessionDirOf(PINNED)));
 
-	await plugin.invoke("trash", { ids: [DOOMED] });
-	const purged = await plugin.invoke("purge", { ids: [DOOMED] });
+	// ── 当前正在使用的会话：拒绝删除（DSH_SESSION_ID） ────────────────────
+	process.env.DSH_SESSION_ID = CURRENT;
+	const deletedCurrent = await plugin.invoke("delete", { ids: [CURRENT] });
 	check(
-		"purging drops the archive entry (no permanent ghost id)",
-		!registry2.archivedSessionIds.includes(DOOMED),
-		JSON.stringify(purged.value.results[0])
+		"the session currently in use is refused",
+		deletedCurrent.value.results[0]?.ok === false && String(deletedCurrent.value.results[0]?.reason).includes("当前正在使用"),
+		JSON.stringify(deletedCurrent.value.results[0])
 	);
+	check("and its directory is left alone", existsSync(join(sessionDirOf(CURRENT), "session.jsonl")));
+	delete process.env.DSH_SESSION_ID;
+	if (realSessionId !== undefined) process.env.DSH_SESSION_ID = realSessionId;
+	// 不再"正在使用"之后就能删掉：也顺带证明拒绝的依据就是那个环境变量。
+	const deletedCurrentAgain = await plugin.invoke("delete", { ids: [CURRENT] });
+	check("once it is no longer the current session it deletes normally", deletedCurrentAgain.value.results[0]?.ok === true);
+	check("and then its directory is gone", !existsSync(sessionDirOf(CURRENT)));
 
-	// ── 保留策略：预览（只读）与「清理 N 天前」（永久删除） ────────────────────
-	const OLD = "session-smoke-old";
-	const FRESH = "session-smoke-fresh";
-	const CORRUPT = "session-smoke-corrupt";
-	await seedSession(OLD, "很旧的会话");
-	await seedSession(FRESH, "刚删的会话");
-	await seedSession(CORRUPT, "缺元数据的旧会话");
-	await plugin.invoke("trash", { ids: [OLD, FRESH, CORRUPT] });
-	// 把删除时间改成"35 天前" / "1 天前"：`trash` 刚写下的都是 `Date.now()`。
-	const metaPathOf = (sessionId) => join(trashDirOf(sessionId), "__trash.json");
-	const agedMeta = JSON.parse(await readFile(metaPathOf(OLD), "utf8"));
-	agedMeta.deletedAt = Date.now() - 35 * DAY_MS;
-	await writeFile(metaPathOf(OLD), JSON.stringify(agedMeta), "utf8");
-	const freshMeta = JSON.parse(await readFile(metaPathOf(FRESH), "utf8"));
-	// 12 小时前：离任何一档（最小 1 天）都远，断言不会因为跑得慢而被边界吃掉。
-	freshMeta.deletedAt = Date.now() - 12 * 60 * 60 * 1000;
-	await writeFile(metaPathOf(FRESH), JSON.stringify(freshMeta), "utf8");
-	// 老条目：没有 `__trash.json`（`listTrash()` 会给它 deletedAt: 0 / restorable: false）。
-	await rm(metaPathOf(CORRUPT), { force: true });
+	// ── 正在跑的会话：逐项拒绝，同一批里的其余项不受影响 ───────────────────
+	const deletedRunning = await plugin.invoke("delete", { ids: [RUNNING, ORDINARY] });
+	check(
+		"a running session is refused item by item, without touching the rest",
+		deletedRunning.value.results.length === 2 &&
+			deletedRunning.value.results[0].ok === false &&
+			String(deletedRunning.value.results[0].reason).includes("正在运行") &&
+			deletedRunning.value.results[1].ok === true &&
+			deletedRunning.value.results[1].sessionId === ORDINARY,
+		JSON.stringify(deletedRunning.value.results)
+	);
+	check(
+		"the running session's directory is left exactly where it was",
+		existsSync(join(sessionDirOf(RUNNING), "session.jsonl")),
+		`running=${existsSync(sessionDirOf(RUNNING))}`
+	);
+	check("the ordinary session in the same batch really went away", !existsSync(sessionDirOf(ORDINARY)));
 
-	// 这条断言同时是"按目录 mtime 缓存"的回归：上一条 `purge` 已经把 DOOMED 的目录删掉，
-	// 但 ARCHIVED / ORDINARY 等目录的内容一点没变 —— 缓存必须让它们照旧报出真实体积。
-	const afterPurgeSnapshot = await plugin.invoke("snapshot", {});
+	// 未知 id 一律是逐项失败，不是传输层异常。
+	const missingId = await plugin.invoke("delete", { ids: ["session-not-there"] });
 	check(
-		"a later snapshot still reports the real sizes of untouched directories (mtime cache)",
-		afterPurgeSnapshot.value.archived.length > 0 && afterPurgeSnapshot.value.archived.every((row) => row.bytes > 0 && row.files === 1),
-		JSON.stringify(afterPurgeSnapshot.value.archived.map((row) => `${row.sessionId}:${row.bytes}`))
-	);
-	// 连续两次快照：第二次应当整体命中缓存，结果必须**逐字一致**（含 totals）。
-	const snapshotAgain = await plugin.invoke("snapshot", {});
-	check(
-		"two consecutive snapshots agree (bounded-concurrency + cache do not lose rows)",
-		JSON.stringify(snapshotAgain.value) === JSON.stringify(afterPurgeSnapshot.value),
-		`${afterPurgeSnapshot.value.archived.length} archived / ${afterPurgeSnapshot.value.trashed.length} trashed`
-	);
-
-	const stats = await plugin.invoke("trash-stats", { days: 30 });
-	check(
-		"trash-stats previews the cleanup without deleting anything",
-		stats.ok === true &&
-			stats.value.days === 30 &&
-			stats.value.count === 1 &&
-			stats.value.bytes > 0 &&
-			stats.value.totalCount === 3 &&
-			stats.value.totalBytes > stats.value.bytes &&
-			stats.value.cutoff < Date.now(),
-		JSON.stringify(stats.value)
-	);
-	check(
-		"the preview only counts entries with a deletion time",
-		stats.value.totalCount - stats.value.count === 2,
-		`total=${stats.value.totalCount} expired=${stats.value.count}`
-	);
-	check(
-		"nothing was removed by the preview",
-		existsSync(trashDirOf(OLD)) && existsSync(trashDirOf(FRESH)) && existsSync(trashDirOf(CORRUPT))
+		"deleting an unknown session reports a per-item failure",
+		missingId.value.results[0]?.ok === false && String(missingId.value.results[0]?.reason).includes("找不到"),
+		JSON.stringify(missingId.value.results[0])
 	);
 
-	const swept = await plugin.invoke("purge-older-than", { days: 30 });
-	check(
-		"purge-older-than removes exactly the previewed entry",
-		swept.value.results.length === 1 && swept.value.results[0].sessionId === OLD && swept.value.results[0].ok === true,
-		JSON.stringify(swept.value.results)
-	);
-	check("the old entry is gone from the trash", !existsSync(trashDirOf(OLD)));
-	check(
-		"the fresh and metadata-less entries are left alone",
-		existsSync(trashDirOf(FRESH)) && existsSync(trashDirOf(CORRUPT)),
-		`fresh=${existsSync(trashDirOf(FRESH))} corrupt=${existsSync(trashDirOf(CORRUPT))}`
-	);
-	check(
-		"purge-older-than unarchives before deleting (no permanent ghost id)",
-		!registry2.archivedSessionIds.includes(OLD),
-		`archived=[${registry2.archivedSessionIds.join(",")}]`
-	);
-	// 缺字段 / 越界的 days 一律被归一化，绝不能变成"清空整个回收站"。
-	const noDays = await plugin.invoke("trash-stats", {});
-	const zeroDays = await plugin.invoke("purge-older-than", { days: 0 });
-	check(
-		"a missing or degenerate day count falls back instead of wiping the trash",
-		noDays.value.days === 30 && noDays.value.count === 0 && zeroDays.value.results.length === 0 && existsSync(trashDirOf(FRESH)),
-		`noDays=${noDays.value.days}/${noDays.value.count} zeroDays=${zeroDays.value.results.length}`
-	);
-
-	// ── 磁盘占用视图（只读，扫整个 sessions 根） ─────────────────────────────
+	// ── 磁盘占用视图（只读，扫整个 sessions 根） ─────────────────────────
 	const usage = await plugin.invoke("usage", {});
 	const usageValue = usage.value;
-	// 此刻的账面：磁盘上 ARCHIVED + ORDINARY 两条；回收站里 FRESH + CORRUPT 两条
-	//（OLD 刚被"清理 N 天前"带走、DOOMED 被永久删除）。
+	// 此刻的账面：只有 RUNNING 还在磁盘上（其余四条都删了）。
 	check(
-		"usage aggregates every session on disk plus the trash",
-		usage.ok === true && usageValue.totalSessions === 4 && usageValue.onDiskSessions === 2 && usageValue.totalBytes > 0,
-		JSON.stringify({ total: usageValue.totalSessions, onDisk: usageValue.onDiskSessions, bytes: usageValue.totalBytes })
+		"usage aggregates every session still on disk",
+		usage.ok === true && usageValue.totalSessions === 1 && usageValue.totalBytes > 0,
+		JSON.stringify({ total: usageValue.totalSessions, bytes: usageValue.totalBytes })
 	);
 	check(
 		"usage totals add up to the sum of its groups",
@@ -692,52 +562,27 @@ try {
 			usageValue.groups.reduce((sum, group) => sum + group.count, 0) === usageValue.totalSessions,
 		JSON.stringify(usageValue.groups)
 	);
-	// CORRUPT 没有 `__trash.json`（cwd 无从谈起），所以它落进"未知目录"那一组 ——
-	// 与客户端列表分组的语义一致（`groups.ts` 的 `groupKeyOf`）。
 	check(
-		"usage groups by the original workspace folder and sorts by size",
-		usageValue.groups.length === 2 &&
-			usageValue.groups[0].title === "Smoke" &&
-			usageValue.groups[0].count === 3 &&
-			usageValue.groups[1].key === "unknown" &&
-			usageValue.groups[1].count === 1 &&
-			usageValue.groups[0].bytes >= usageValue.groups[1].bytes,
-		JSON.stringify(usageValue.groups)
+		"the largest list carries the surviving session and its archived flag",
+		usageValue.largest.length === 1 && usageValue.largest[0].sessionId === RUNNING && usageValue.largest[0].archived === false,
+		JSON.stringify(usageValue.largest)
 	);
 	check(
-		"the largest list is size-descending and capped",
-		usageValue.largest.length > 0 &&
-			usageValue.largest.length <= 5 &&
-			usageValue.largest.every((row, index) => index === 0 || usageValue.largest[index - 1].bytes >= row.bytes) &&
-			usageValue.largest.every((row) => row.bytes > 0),
-		JSON.stringify(usageValue.largest.map((row) => `${row.sessionId}:${row.bytes}`))
-	);
-	check(
-		"the oldest list is ascending by createdAt and flags trashed rows",
-		usageValue.oldest.length > 0 &&
-			usageValue.oldest[0].createdAt === 1 &&
-			usageValue.oldest.some((row) => row.trashed === true && row.deletedAt !== null) &&
-			usageValue.oldest.every((row) => row.archived === registry2.archivedSessionIds.includes(row.sessionId)),
-		JSON.stringify(usageValue.oldest.map((row) => `${row.sessionId}:${row.createdAt}:${row.trashed}`))
+		"a running session is flagged by the usage view",
+		usageValue.oldest.some((row) => row.sessionId === RUNNING && row.active === true),
+		JSON.stringify(usageValue.oldest.map((row) => `${row.sessionId}:${row.active}`))
 	);
 
-	// ── 复制路径 / 在资源管理器中显示 ───────────────────────────────────────
-	const openPath = await plugin.invoke("open", { ids: [ARCHIVED], target: "path" });
+	// ── 复制路径 / 在资源管理器中显示 ───────────────────────────────────
+	const openPath = await plugin.invoke("open", { ids: [RUNNING], target: "path" });
 	check(
 		"open returns the on-disk session directory without touching the shell",
 		openPath.ok === true &&
-			openPath.value.sessionId === ARCHIVED &&
+			openPath.value.sessionId === RUNNING &&
 			openPath.value.revealed === false &&
-			openPath.value.path.replace(/\\/g, "/").endsWith(`/sessions/${SLUG}/${ARCHIVED}`) &&
+			openPath.value.path.replace(/\\/g, "/").endsWith(`/sessions/${SLUG}/${RUNNING}`) &&
 			existsSync(openPath.value.path),
 		JSON.stringify(openPath.value ?? openPath.error)
-	);
-	// 回收站里的会话：目录搬到了回收站，`open` 也要找得到（"定位"对两个页签都成立）。
-	const openTrashed = await plugin.invoke("open", { ids: [FRESH], target: "path" });
-	check(
-		"open also resolves a session sitting in the trash",
-		openTrashed.ok === true && openTrashed.value.path === trashDirOf(FRESH),
-		JSON.stringify(openTrashed.value ?? openTrashed.error)
 	);
 	const openMissing = await plugin.invoke("open", { ids: ["session-not-there"] });
 	check(
@@ -747,11 +592,8 @@ try {
 	);
 	// 路径校验：`open` 只吃 `sessionId`，路径由宿主自己拼；但 id 是个**非空字符串**就够了
 	//（线协议不保证它不是一个相对路径），所以拼出来的结果必须再校验一次"落在允许的根下"。
-	// 这里直接单测那道判据本身：`<root>` 相等、真子路径放行；兄弟目录（前缀相同但不带分隔符）
-	// 与任何 `..` 逃逸一律拒绝。
-	// **路径必须用 `join()` 拼**：判据比的是 `path.sep`。2026-10-14 这条断言曾经写死 `\\`，
-	// 于是在 Linux 上（`sep` 是 `/`，`root + "/"` 匹配不上反斜杠子路径）挂成 `73/74`：
-	// `self=true child=false sibling=false` —— 判据本身没问题，是断言不可移植。
+	// **路径必须用 `join()` 拼**：判据比的是 `path.sep`（2026-10-14 这条断言曾经写死 `\\`，
+	// 于是在 Linux 上挂成 73/74 —— 判据本身没问题，是断言不可移植）。
 	const root = join(sep, "srv", "dsh", "sessions");
 	const sibling = `${root}-evil`;
 	const child = join(root, "--slug--", "session-1");
@@ -772,58 +614,19 @@ try {
 		JSON.stringify(escape.error)
 	);
 	// 默认 target（缺字段 / 乱写）一律当只读的 "path"：绝不能让一个缺字段的请求去叫 shell。
-	const defaultTarget = await plugin.invoke("open", { ids: [ARCHIVED], target: "nonsense" });
+	const defaultTarget = await plugin.invoke("open", { ids: [RUNNING], target: "nonsense" });
 	check(
 		"an unknown target degrades to the read-only path query",
 		defaultTarget.ok === true && defaultTarget.value.revealed === false,
 		JSON.stringify(defaultTarget.value ?? defaultTarget.error)
 	);
-
-	// ── `__trash.json` 的 schema 版本约定（字段表见 src/host/trash.ts 文件头） ────
-	// 放在最后：上面那些断言都盯着"回收站里恰好几条 / 磁盘上恰好几条"的账面，
-	// 这里再塞两条进去会把它们的数字挤歪。
-	const NOVER = "session-smoke-noversion";
-	const FUTURE = "session-smoke-future-meta";
-	await seedSession(NOVER, "没有版本字段的老条目");
-	await seedSession(FUTURE, "更新版本的插件写的条目");
-	await plugin.invoke("trash", { ids: [NOVER, FUTURE] });
-	const metaPath = (sessionId) => join(trashDirOf(sessionId), "__trash.json");
-
-	// 缺 `version` = 最早那版（插件还叫 `dsh-session-manager` 的时代）写下的：必须照旧能恢复。
-	const noVersionMeta = await trashMetaOf(NOVER);
-	delete noVersionMeta.version;
-	await writeFile(metaPath(NOVER), JSON.stringify(noVersionMeta), "utf8");
-	const noVersionRestore = await plugin.invoke("restore", { ids: [NOVER] });
-	check(
-		"a trash entry without a version field (the oldest on-disk format) still restores",
-		noVersionRestore.value.results[0]?.ok === true && existsSync(join(tempHome, "sessions", SLUG, NOVER)),
-		JSON.stringify(noVersionRestore.value.results[0])
-	);
-
-	// 版本比插件新：语义不可猜 —— 拒绝，且**什么都不许动**（目录必须原地留在回收站里）。
-	const futureMeta = await trashMetaOf(FUTURE);
-	futureMeta.version = 99;
-	await writeFile(metaPath(FUTURE), JSON.stringify(futureMeta), "utf8");
-	const futureRestore = await plugin.invoke("restore", { ids: [FUTURE] });
-	check(
-		"a trash entry written by a newer schema version is refused, with the version in the reason",
-		futureRestore.value.results[0]?.ok === false &&
-			String(futureRestore.value.results[0]?.reason).includes("version 99") &&
-			String(futureRestore.value.results[0]?.reason).includes("升级插件"),
-		JSON.stringify(futureRestore.value.results[0])
-	);
-	check(
-		"and refusing it leaves the trashed directory exactly where it was",
-		existsSync(trashDirOf(FUTURE)) &&
-			existsSync(join(trashDirOf(FUTURE), "session.jsonl")) &&
-			!existsSync(join(tempHome, "sessions", SLUG, FUTURE)),
-		`trash=${existsSync(trashDirOf(FUTURE))} sessions=${existsSync(join(tempHome, "sessions", SLUG, FUTURE))}`
-	);
-
 	for (const dispose of plugin.disposers.splice(0)) await dispose();
 } finally {
 	if (realHome === undefined) delete process.env.DSH_HOME;
 	else process.env.DSH_HOME = realHome;
+	// `DSH_SESSION_ID` 是全局的：拒绝删除当前会话那一段会临时改它，异常路径也必须还原。
+	if (realSessionId === undefined) delete process.env.DSH_SESSION_ID;
+	else process.env.DSH_SESSION_ID = realSessionId;
 	await rm(tempHome, { recursive: true, force: true });
 }
 

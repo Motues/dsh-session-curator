@@ -123,22 +123,7 @@ function assertFetchRoute(route) {
 		throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} repeats a method`);
 }
 
-const ENDPOINTS = [
-	"snapshot",
-	"describe",
-	"archive",
-	"unarchive",
-	"pin",
-	"unpin",
-	"trash",
-	"restore",
-	"purge",
-	"trash-stats",
-	"purge-older-than",
-	"usage",
-	"open",
-	"check-update"
-];
+const ENDPOINTS = ["snapshot", "describe", "archive", "unarchive", "pin", "unpin", "delete", "usage", "open", "check-update"];
 const CHANNEL = "/api";
 const PREFIX = "session-curator";
 const ROUTE_PREFIX = `${CHANNEL}/${PREFIX}`;
@@ -297,12 +282,10 @@ check(
 check(
 	"snapshot value carries the documented shape",
 	envelope.result?.ok === true &&
-		["dshHome", "trashDir", "sessionsDir", "archived", "pinned", "trashed", "totals"].every(
-			(key) => key in (envelope.result.value ?? {})
-		)
+		["dshHome", "sessionsDir", "archived", "pinned", "totals"].every((key) => key in (envelope.result.value ?? {}))
 );
 
-// `describe`（第十个端点）也走一遍真 Request：它读的是**真实** DSH_HOME，所以这里只问一个
+// `describe` 也走一遍真 Request：它读的是**真实** DSH_HOME，所以这里只问一个
 // 一定不存在的 id —— 期望 200 + `{ok:false}` 的错误信封，而不是 404 或抛异常。
 const describeRpcId = "activation-describe";
 const describeResponse = await shared.fetch(

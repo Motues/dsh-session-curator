@@ -3,9 +3,9 @@
  *
  * 安全边界（这一段是这个文件存在的全部理由）：
  *   - 路径**不接受客户端传**：只吃 `sessionId`，由宿主自己按 `<DSH_HOME>/sessions/<slug>/<id>`
- *     或回收站目录拼出来。客户端就算传了别的路径也没用 —— 入参里根本没有路径字段。
- *   - 拼出来之后再 `resolve()` 一次并断言它落在**允许的两个根**（`<DSH_HOME>/sessions`、
- *     回收站根）之下。这一道是为了挡住 `../` 之类的 id（线协议的 `idsOf()` 只保证是
+ *     拼出来。客户端就算传了别的路径也没用 —— 入参里根本没有路径字段。
+ *   - 拼出来之后再 `resolve()` 一次并断言它落在**允许的根**（`<DSH_HOME>/sessions`）
+ *     之下。这一道是为了挡住 `../` 之类的 id（线协议的 `idsOf()` 只保证是
  *     非空字符串，不保证它不是一个相对路径）。
  *   - 只有 `target: "reveal"` 才会真的去叫系统文件管理器，而且只用**固定的可执行名**
  *     （`explorer.exe` / `open` / `xdg-open`），参数是那个已经校验过的目录。不拼 shell 字符串，
@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { messageOf } from "./fs-utils.js";
-import { sessionsRoot, trashRoot } from "./paths.js";
+import { sessionsRoot } from "./paths.js";
 import type { SessionDirInfo } from "./session-manager.js";
 import type { OpenResult, OpenTarget } from "../shared/protocol.js";
 
@@ -35,11 +35,11 @@ export function openTargetOf(value: unknown): OpenTarget {
 }
 
 /**
- * 两个允许的根：会话目录与回收站。`resolve()` 之后比较，且要求"相等或以 `<root>+分隔符`
+ * 允许的根：整个会话目录。`resolve()` 之后比较，且要求"相等或以 `<root>+分隔符`
  * 开头" —— 单比 `startsWith(root)` 会把 `<DSH_HOME>/sessions-evil` 放进来。
  */
 function allowedRoots(): string[] {
-	return [resolve(sessionsRoot()), resolve(trashRoot())];
+	return [resolve(sessionsRoot())];
 }
 
 function inside(root: string, target: string): boolean {
@@ -77,20 +77,15 @@ function reveal(path: string): { ok: true } | { ok: false; reason: string } {
 /**
  * `open` 端点：算路径 → 校验 → （可选）叫文件管理器。
  *
- * `sessionId` 必须能在磁盘或回收站里找到；找不到就抛错，由信封兜住（与 `describe` 一致）。
+ * `sessionId` 必须能在磁盘上找到；找不到就抛错，由信封兜住（与 `describe` 一致）。
  */
 export async function openSession(host: OpenHost, ids: string[], target: OpenTarget): Promise<OpenResult> {
 	const sessionId = ids[0];
 	if (typeof sessionId !== "string" || sessionId === "") throw new Error("缺少会话 id");
 
-	// 磁盘优先，其次回收站：同一个 id 不可能同时在两处（删除时目录被搬走了）。
 	const dirs = await host.scanSessionDirs();
-	let path = dirs.get(sessionId)?.dir ?? null;
-	if (path === null) {
-		const inTrash = resolve(trashRoot(), sessionId);
-		if (existsSync(inTrash)) path = inTrash;
-	}
-	if (path === null) throw new Error("找不到这个会话的日志目录（磁盘和回收站里都没有）");
+	const path = dirs.get(sessionId)?.dir ?? null;
+	if (path === null) throw new Error("找不到这个会话的日志目录（磁盘上不存在）");
 
 	const resolved = resolve(path);
 	const roots = allowedRoots();

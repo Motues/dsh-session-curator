@@ -3,14 +3,14 @@
  *
  * 六个贡献：
  *   1. `sidebar.workspaces.session.menu.item`（order 500，排在官方 archive 之后）：
- *      一行「删除会话」，点击后弹确认框，确认即软删除到回收站。
+ *      一行「删除会话」，点击后弹确认框，确认即**物理删除**（不可恢复）。
  *   2. `shell.overlay`：全局确认弹窗宿主（菜单项与设置面板共用）。
- *   3. `settings.section`（order 45）：会话管理面板 —— 已归档 / 已置顶 / 回收站 + 配置。
+ *   3. `settings.section`（order 45）：会话管理面板 —— 已归档 / 已置顶 / 磁盘占用 / 配置。
  *   4. `sidebar.session.row.hover`（order 50）：hover 卡片里补"体积 / 文件数 / 原目录 /
- *      在不在回收站"（官方卡片只画标题、相对时间与运行状态）。
- *   5. `sidebar.workspaces.session.row.action`（order 500）：行内「移入回收站」，
+ *      在不在归档 / 置顶里"（官方卡片只画标题、相对时间与运行状态）。
+ *   5. `sidebar.workspaces.session.row.action`（order 500）：行内「删除会话」，
  *      不必再点开 ⋯ 菜单（官方自己的归档 / 置顶就在这个槽位里，顺序 100 / 200）。
- *   6. `shell.overlay`（order 70）：删除成功后的「撤销」toast。
+ *   6. `shell.overlay`（order 70）：复制路径 / 定位这类结果的一次性提示。
  *
  * ⚠️ 本文件**不是**可以直接 <script> 加载的束：`lib/client.js` 的
  * `window.__ModuleLoader__.load({id, factory})` 外壳由 `scripts/build.mjs` 在构建时套上
@@ -22,8 +22,8 @@ import { DialogHost } from "./components/dialog-host.js";
 import { SessionHover } from "./components/session-hover.js";
 import { SessionManagerPanel } from "./components/settings-panel.js";
 import { ToastHost } from "./components/toast-host.js";
-import { TrashRowButton } from "./components/trash-row-button.js";
-import { requestTrash } from "./dialog.js";
+import { DeleteRowButton } from "./components/delete-row-button.js";
+import { requestDelete } from "./dialog.js";
 import { NS, dictionaries } from "./i18n.js";
 import { reportError, setContext, type ClientContext } from "./runtime.js";
 import type { TFn } from "./i18n.js";
@@ -37,7 +37,7 @@ const TOAST_ID = "session-curator.toast";
 /** hover 卡片里属于本插件的那一节。 */
 const HOVER_ID = "session-curator.hover";
 /** 会话行 hover 时的行内删除按钮。 */
-const ROW_ACTION_ID = "session-curator.trash";
+const ROW_ACTION_ID = "session-curator.delete-row";
 /** 本插件自己的设置页 id（也是"没得借"时的兜底）。 */
 const SECTION_ID = "session-curator";
 /**
@@ -52,7 +52,7 @@ const SECTION_ID = "session-curator";
  * 我们的 `session-curator` 不在表里，所以一直是"默认齿轮"（`settings.section` 的
  * options 只读 id / order / label，外壳不看 icon 字段，插件没法自带导航图标）。
  * 表里**唯一没人用**的 id 是 `archived-sessions`，它映射到归档盒子图标 —— 语义刚好贴合
- * 本插件（归档 / 回收站管理），所以借用它。
+ * 本插件（归档 / 置顶管理），所以借用它。
  */
 const NAV_SECTION_ID = "archived-sessions";
 
@@ -104,7 +104,7 @@ export function apply(ctx: ClientContext): void {
 			name: "sidebar.workspaces.session.menu.item",
 			id: MENU_ID,
 			order: 500,
-			label: () => t("menuDelete"),
+			label: () => t("deleteSession"),
 			locale: NS
 		},
 		(props: SessionMenuItemProps) => {
@@ -116,10 +116,10 @@ export function apply(ctx: ClientContext): void {
 					separatorBefore: true,
 					onSelect: () => {
 						setMenuOpen(false);
-						requestTrash([props.sessionId], props.displayTitle || props.sessionId);
+						requestDelete([props.sessionId], props.displayTitle || props.sessionId);
 					}
 				},
-				t("menuDelete")
+				t("deleteSession")
 			);
 		},
 		"menu item"
@@ -138,7 +138,7 @@ export function apply(ctx: ClientContext): void {
 		"dialog host"
 	);
 
-	// 3) 设置页：已归档 / 已置顶 / 回收站（id 见 sectionIdFor：为了导航栏的归档图标）。
+	// 3) 设置页：已归档 / 已置顶 / 磁盘占用 / 配置（id 见 sectionIdFor：为了导航栏的归档图标）。
 	contribute(
 		"settings.section",
 		{
@@ -169,9 +169,9 @@ export function apply(ctx: ClientContext): void {
 	/**
 	 * 5) 行内 hover 按钮：一只手就能删，不必点开 ⋯ 再点一次。
 	 *
-	 * 只是**快捷入口**，不新增语义：点击走同一个 `requestTrash()` → 同一份确认弹窗
-	 *（软删除永远先问一次），确认后同样有撤销 toast。形状与官方自己的归档 / 置顶按钮一致
-	 *（同在这个槽位，order 100 / 200），见 `components/trash-row-button.ts`。
+	 * 只是**快捷入口**，不新增语义：点击走同一个 `requestDelete()` → 同一份确认弹窗
+	 *（物理删除永远先问一次，且要勾"我明白这无法撤销"）。形状与官方自己的归档 / 置顶按钮一致
+	 *（同在这个槽位，order 100 / 200），见 `components/delete-row-button.ts`。
 	 */
 	contribute(
 		"sidebar.workspaces.session.row.action",
@@ -181,11 +181,11 @@ export function apply(ctx: ClientContext): void {
 			order: 500,
 			locale: NS
 		},
-		TrashRowButton,
+		DeleteRowButton,
 		"row action"
 	);
 
-	// 6) 删除成功后的「撤销」toast（order 排在确认弹窗之后，两者互不遮挡）。
+	// 6) 复制路径 / 定位这类结果的一次性提示（order 排在确认弹窗之后，两者互不遮挡）。
 	contribute(
 		"shell.overlay",
 		{
@@ -217,7 +217,6 @@ export {
 	isFilterActive,
 	workspaceSummaries
 } from "./groups.js";
-export { TRASH_RETENTION_DAYS, TRASH_DAYS_MIN, TRASH_DAYS_MAX, parseCustomDays, effectiveTrashDays } from "./settings.js";
 export { SessionRow } from "./components/session-row.js";
 export { GroupHeader } from "./components/group-header.js";
 export { Dropdown } from "./components/dropdown.js";
@@ -225,6 +224,7 @@ export { UsagePanel } from "./components/usage-panel.js";
 export { describeSession, forgetDetails } from "./detail.js";
 // 快照缓存的读/清：自检要造"冷启动（没有缓存）"这一帧，并断言第一份快照真的被记住了。
 export { cachedSnapshot, forgetSnapshot } from "./snapshot.js";
-export { showTrashUndo, showNotice, toastStore, undoTrash } from "./toast.js";
-// 自检要清掉"待确认请求"（`client.dialogStore.set(null)`），所以这个 store 也导出来。
-export { dialogStore } from "./dialog.js";
+export { showNotice, toastStore } from "./toast.js";
+// 自检要清掉"待确认请求"（`client.dialogStore.set(null)`）、并手动触发一次"写操作失效"
+//（`client.mutationStore.set(...)`），所以这两个 store 也导出来。
+export { dialogStore, mutationStore } from "./dialog.js";

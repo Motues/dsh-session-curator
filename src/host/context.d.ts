@@ -60,19 +60,14 @@ export type EndpointHandler = (manager: EndpointHost, payload: EndpointPayload) 
  */
 export interface EndpointHost {
 	snapshot(): Promise<unknown>;
-	/** 单个会话的事实（第十个端点）；找不到就抛错，由信封兜住。 */
+	/** 单个会话的事实；找不到就抛错，由信封兜住。 */
 	describe(ids: string[]): Promise<unknown>;
 	archive(ids: string[], stopActivity?: boolean): Promise<unknown>;
 	unarchive(ids: string[]): Promise<unknown>;
 	pin(ids: string[]): Promise<unknown>;
 	unpin(ids: string[]): Promise<unknown>;
-	trash(ids: string[]): Promise<unknown>;
-	restore(ids: string[]): Promise<unknown>;
-	purge(ids: string[]): Promise<unknown>;
-	/** 回收站保留策略的预览（只读）。 */
-	trashStats(days: number): Promise<unknown>;
-	/** 清理 N 天前（永久删除，逐项结果在信封里）。 */
-	purgeOlderThan(days: number): Promise<unknown>;
+	/** 物理删除（不可恢复，逐项结果在信封里）。 */
+	delete(ids: string[]): Promise<unknown>;
 	/** 磁盘占用视图（只读，扫整个 sessions 根）。 */
 	usage(): Promise<unknown>;
 	/** 会话日志目录：只要路径，或再叫一次系统文件管理器。 */

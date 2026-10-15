@@ -7,7 +7,27 @@
 > `scripts/release.mjs` 会按 `## [<版本>]` 这个标题格式取出对应小节，作为 GitHub Release 的正文 ——
 > 发版时把 `Unreleased` 改成 `## [X.Y.Z] - YYYY-MM-DD` 再提交即可。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-15
+
+### 移除
+
+- **回收站功能整体移除**：删除改成**物理删除** —— 会话目录与它的投影缓存直接从磁盘删掉，不可恢复。
+  - 移除回收站页签、恢复、永久删除、按时间清理（7 / 30 / 90 天档位与自定义天数）以及回收站保留策略设置。
+  - 移除删除成功后的「撤销」toast：物理删除没有可撤销的东西。
+  - 移除五个端点（`trash` / `restore` / `purge` / `trash-stats` / `purge-older-than`），新增 `delete`；
+    端点数从 14 条降到 **10 条**。
+  - 删除 `src/host/trash.ts` 与 `src/host/retention.ts`（连同 `__trash.json` 的 schema 约定）。
+  - `<DSH_HOME>/storages/session-manager/trash` 里**历史遗留**的软删除数据插件不再读写，也不会自动迁移
+    或删除；需要时人工把 `trash/<sessionId>/` 搬回 `sessions/<slug>/<sessionId>/`。
+
+### 变更
+
+- 会话行 `⋯` 菜单的「删除会话」、行内删除按钮、批量删除与「整个工作区删除」统一走**物理删除确认弹窗**：
+  正文写明「日志文件会从磁盘上彻底移除，无法恢复」，并提示**想以后还能找回请改用「归档」**；确认前必须
+  勾选「我明白这无法撤销」。正在运行、以及当前正在使用的会话一律拒绝。
+- 会话面板从 5 个页签降到 **4 个**：已归档 / 已置顶 / 磁盘占用 / 配置；排序去掉「删除时间」档。
+- 磁盘占用视图不再区分「磁盘上 / 回收站里」，也不再给任何行打「在回收站」胶囊。
+- 「归档」保持不变，它就是"留退路"的机制：同样能让会话从侧边栏消失，而且随时可以取消归档找回来。
 
 ### 内部
 
@@ -18,6 +38,8 @@
   随之失去的自动检查：lockfile 与 `package.json` 是否一致（原来靠 `pnpm install --frozen-lockfile`）。
 - 修掉一条只在 Linux 上挂的自检断言（`scripts/smoke.mjs` 的路径守卫，写死了 Windows 反斜杠，
   曾让 v0.2.0 那次 CI 跑成 `73/74`）；只动 `scripts/`，已发布的 0.2.0 内容不受影响。
+- `scripts/smoke.mjs` 的临时 HOME 段落从"软删除语义"改成"物理删除语义"：目录真的没了、归档 / 置顶 /
+  工作区三处记账清干净、正在运行与当前会话逐项拒绝、投影缓存一并删除。
 
 ## [0.2.0] - 2026-10-14
 
@@ -103,7 +125,8 @@
   按会话原来的工作区文件夹分组，支持恢复与永久删除；永久删除需要勾"我明白这无法撤销"。
 - 确认弹窗（`shell.overlay`）与按会话原始目录归组的分组栏。
 
-[Unreleased]: https://github.com/Motues/dsh-session-curator/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Motues/dsh-session-curator/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Motues/dsh-session-curator/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Motues/dsh-session-curator/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Motues/dsh-session-curator/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Motues/dsh-session-curator/compare/v0.1.0...v0.1.1

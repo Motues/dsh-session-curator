@@ -2,15 +2,12 @@
  * dsh-session-curator — host 半区入口。
  *
  * 提供三块能力：
- *   1. 会话软删除：先把会话**藏起来**（进 registry-global 的归档集合 —— DSH 里唯一能让它
- *      从侧边栏所有分组面消失的机制，否则它会以"未分组"的幽灵行留在那里），再把它从
- *      工作区记账里摘掉（`Workspace.detachSession`），最后把
- *      `<DSH_HOME>/sessions/<slug>/<sessionId>/` 整个搬到
- *      `<DSH_HOME>/storages/session-manager/trash/<sessionId>/`。可完整恢复。
- *      ⚠️ 目录名 `session-manager` 是**故意保留的旧名**（见 host/paths.ts）。
- *   2. 回收站管理：列出 / 恢复 / 永久删除。
- *   3. 归档会话管理：列出全部归档会话（标题、目录、体积），支持批量取消归档、置顶，
- *      以及直接删除。归档/取消归档/置顶全部走官方 `ctx.workspaceRegistry`。
+ *   1. 会话删除：**物理删除**（不可恢复）—— 先清掉归档 / 置顶 / 工作区三处记账，再删掉
+ *      `<DSH_HOME>/sessions/<slug>/<sessionId>/` 与它的投影缓存。想留退路的用户走归档：
+ *      归档同样能让会话从侧边栏消失，而且随时能找回来。
+ *   2. 归档会话管理：列出全部归档会话（标题、目录、体积），支持批量取消归档、置顶、删除。
+ *   3. 置顶会话管理：同一套列表与动作；归档 / 取消归档 / 置顶全部走官方 `ctx.workspaceRegistry`。
+ *      另有三个辅助端点：磁盘占用视图（只读）、复制路径 / 在资源管理器中显示、更新检查。
  *
  * 对客户端暴露一组挂在共享 `/api` 通道下的精确 Fetch 路由（
  * `ctx.connection.fetch.register`）：信任检查与会话鉴权由 Connection 的 `/api`
@@ -37,6 +34,5 @@ export function apply(ctx: HostContext): void {
 // 纯函数 / 纯工具，给 `scripts/smoke.mjs` 直接单测（插件运行时用不到）。
 export { compareVersions } from "./host/update.js";
 export { dirStats, forgetDirStats } from "./host/fs-utils.js";
-export { isExpired, retentionCutoff } from "./host/retention.js";
 // `open` 的路径校验单独导出：自检要直接断言那道判据，不必真的去调系统 shell。
 export { insideRoot } from "./host/open.js";

@@ -199,10 +199,10 @@ const { groupRows, groupKeyOf, SessionRow, GroupHeader } = client;
 check("groupRows / groupKeyOf are exported as pure functions", typeof groupRows === "function" && typeof groupKeyOf === "function");
 check(
 	"the new filter/sort helpers are exported too",
-	["sortRows", "filterRows", "matchesSearch", "isFilterActive", "TRASH_RETENTION_DAYS"].every(
+	["sortRows", "filterRows", "matchesSearch", "isFilterActive", "workspaceSummaries"].every(
 		(name) => typeof client[name] !== "undefined"
 	),
-	["sortRows", "filterRows", "matchesSearch", "isFilterActive", "TRASH_RETENTION_DAYS"]
+	["sortRows", "filterRows", "matchesSearch", "isFilterActive", "workspaceSummaries"]
 		.map((name) => `${name}=${typeof client[name]}`)
 		.join(", ")
 );
@@ -227,8 +227,8 @@ check(
 );
 check(
 	"collapseKey keeps the state per tab",
-	client.collapseKey("trash", "unknown") === "trash:unknown",
-	client.collapseKey("trash", "unknown")
+	client.collapseKey("pinned", "unknown") === "pinned:unknown",
+	client.collapseKey("pinned", "unknown")
 );
 
 const t = (key) =>
@@ -329,24 +329,17 @@ const DAY = 24 * 60 * 60 * 1000;
 const ages = [
 	filterRow("fresh", { createdAt: now - 1 * DAY }),
 	filterRow("old", { createdAt: now - 30 * DAY }),
-	filterRow("unknown", { createdAt: null }),
-	filterRow("trashed", { deletedAt: now - 2 * DAY })
+	filterRow("unknown", { createdAt: null })
 ];
 const recent = client.filterRows(ages, { search: "", timeFilter: "recent", now });
 check(
 	"the recent filter keeps rows inside the 7-day window and drops the timeless one",
-	recent.map((row) => row.sessionId).join(",") === "fresh,trashed",
+	recent.map((row) => row.sessionId).join(",") === "fresh",
 	recent.map((row) => row.sessionId).join(",")
 );
 check(
-	"the trash tab filters by deletion time (not by a missing createdAt)",
-	client.matchesFilter(filterRow("t", { deletedAt: now - 2 * DAY }), { search: "", timeFilter: "recent", now }) &&
-		!client.matchesFilter(filterRow("t", { deletedAt: now - 40 * DAY }), { search: "", timeFilter: "recent", now }),
-	""
-);
-check(
 	"timeFilter = all never drops rows without a timestamp",
-	client.filterRows(ages, { search: "", timeFilter: "all", now }).length === 4
+	client.filterRows(ages, { search: "", timeFilter: "all", now }).length === 3
 );
 check(
 	"isFilterActive tells the panel when to show the filtered counter",
@@ -369,15 +362,6 @@ check(
 	"order = createdAt puts the newest first and the timeless last",
 	sortedByCreated.map((row) => row.sessionId).join(",") === "newer,older,none,zero",
 	sortedByCreated.map((row) => row.sessionId).join(",")
-);
-const sortedByDeleted = client.sortRows(
-	[filterRow("a", { deletedAt: 5 }), filterRow("b", { deletedAt: 50 }), filterRow("c", {})],
-	"deletedAt"
-);
-check(
-	"order = deletedAt is most-recently-deleted first",
-	sortedByDeleted.map((row) => row.sessionId).join(",") === "b,a,c",
-	sortedByDeleted.map((row) => row.sessionId).join(",")
 );
 
 // 6) 两个新组件是纯 props 函数，可以直接调。
@@ -558,7 +542,6 @@ check(
 const SNAPSHOT = {
 	dshHome: "C:\\Users\\Motues\\.dsh",
 	version: "0.1.0",
-	trashDir: "C:\\Users\\Motues\\.dsh\\storages\\session-manager\\trash",
 	sessionsDir: "C:\\Users\\Motues\\.dsh\\sessions",
 	archived: [
 		{
@@ -610,48 +593,22 @@ const SNAPSHOT = {
 			active: true
 		}
 	],
-	trashed: [
-		{
-			sessionId: "s-9",
-			title: "旧会话",
-			cwd: "C:\\Data\\BlogPage",
-			workspaceId: "w2",
-			workspaceTitle: "BlogPage",
-			bytes: 40,
-			files: 1,
-			deletedAt: 9,
-			restorable: true
-		},
-		// 老条目：`__trash.json` 丢了（`restorable: false`），恢复按钮必须点不动。
-		{
-			sessionId: "s-10",
-			title: "缺元数据的旧会话",
-			cwd: "C:\\Data\\BlogPage",
-			workspaceId: "w2",
-			workspaceTitle: "BlogPage",
-			bytes: 50,
-			files: 1,
-			deletedAt: 8,
-			restorable: false
-		}
-	],
-	totals: { archived: 3, archivedBytes: 600, pinned: 1, trashed: 2, trashBytes: 90 },
+	totals: { archived: 3, archivedBytes: 600, pinned: 1 },
 	activeSessionIds: ["s-4"]
 };
 
 /**
+/**
  * `usage` 的假回答：形状与宿主真实产出一致（见 src/shared/protocol.d.ts）。
  *
- * 行上刻意凑齐四种组合，好把右侧那个按钮的三种形态都摆出来：
+ * 行上刻意凑齐几种组合，好把右侧那个按钮的形态都摆出来：
  *   `s-4` 置顶 + 运行中 → 不给按钮（归档会先停掉它的工作）；
  *   `s-3` / `s-1` 已归档 → 「取消归档」（再点一次「归档」是幂等的空操作）；
- *   `s-5` 普通会话 → 「归档」；
- *   `s-9` 在回收站 → 不给按钮（目录都搬走了，先恢复）。
+ *   `s-5` / `s-9` 普通会话 → 「归档」。
  */
 const USAGE = {
 	totalSessions: 5,
 	totalBytes: 4160,
-	onDiskSessions: 4,
 	groups: [
 		{ key: "cwd:c:/data/momo", title: "Momo", count: 4, bytes: 4064 },
 		{ key: "cwd:c:/data/blogpage", title: "BlogPage", count: 1, bytes: 96 }
@@ -665,10 +622,8 @@ const USAGE = {
 			bytes: 4000,
 			files: 4,
 			createdAt: 4,
-			deletedAt: null,
 			archived: false,
 			pinned: true,
-			trashed: false,
 			active: true
 		},
 		{
@@ -679,10 +634,8 @@ const USAGE = {
 			bytes: 96,
 			files: 2,
 			createdAt: 3,
-			deletedAt: null,
 			archived: true,
 			pinned: false,
-			trashed: false,
 			active: false
 		}
 	],
@@ -695,10 +648,8 @@ const USAGE = {
 			bytes: 100,
 			files: 1,
 			createdAt: 1,
-			deletedAt: null,
 			archived: true,
 			pinned: false,
-			trashed: false,
 			active: false
 		},
 		{
@@ -709,10 +660,8 @@ const USAGE = {
 			bytes: 40,
 			files: 1,
 			createdAt: null,
-			deletedAt: 9,
 			archived: false,
 			pinned: false,
-			trashed: true,
 			active: false
 		},
 		{
@@ -723,10 +672,8 @@ const USAGE = {
 			bytes: 64,
 			files: 1,
 			createdAt: 5,
-			deletedAt: null,
 			archived: false,
 			pinned: false,
-			trashed: false,
 			active: false
 		}
 	]
@@ -769,9 +716,7 @@ const DETAILS = {
 		onDisk: true,
 		archived: true,
 		pinned: false,
-		trashed: false,
-		deletedAt: null,
-		restorable: false
+		active: false
 	},
 	"s-9": {
 		sessionId: "s-9",
@@ -783,12 +728,10 @@ const DETAILS = {
 		createdAt: null,
 		bytes: 40,
 		files: 1,
-		onDisk: false,
+		onDisk: true,
 		archived: false,
 		pinned: false,
-		trashed: true,
-		deletedAt: 9,
-		restorable: true
+		active: false
 	}
 };
 
@@ -797,16 +740,12 @@ let dictionaries = null;
 const hostCalls = [];
 /** 更新检查的假回答；置 null 表示这次让宿主失败（测错误分支）。 */
 let updateResponse = { current: "0.1.0", latest: "0.1.1", outdated: true, checkedAt: 0 };
-/** 置 true 时 `restore` 回错误信封（测"撤销失败"那条分支）。 */
-let failRestore = false;
-/** `trash-stats` 的假回答：默认"有 2 条过期待清理"，用来驱动保留策略的预览与按钮。 */
-let trashStatsResponse = { days: 30, cutoff: 1_600_000_000_000, count: 2, bytes: 2048, totalCount: 2, totalBytes: 2048 };
+/** 置 true 时 `delete` 回错误信封（测"删除失败"那条分支）。 */
+let failDelete = false;
 /** `usage` 的假回答；置 null 表示这次让宿主失败（测错误分支）。 */
 let usageResponse = USAGE;
 /** 置 true 时 `open`（reveal）回"没打开"，用来验证降级成"复制路径 + 提示"。 */
 let failReveal = false;
-/** 记录 `purge-older-than` 收到的入参（断言它只传 days，不传 ids）。 */
-const purgeOldCalls = [];
 const fakeCtx = {
 	get: (name) =>
 		name === "connection"
@@ -836,21 +775,6 @@ const fakeCtx = {
 											: { ...OPEN_RESULT, revealed: reveal }
 								};
 							}
-							if (endpoint.endsWith("trash-stats")) {
-								if (trashStatsResponse === null)
-									return { ok: false, error: { code: "session-curator/error", message: "回收站读不到" } };
-								return {
-									ok: true,
-									value: {
-										...trashStatsResponse,
-										days: payload && typeof payload.days === "number" ? payload.days : trashStatsResponse.days
-									}
-								};
-							}
-							if (endpoint.endsWith("purge-older-than")) {
-								purgeOldCalls.push(payload);
-								return { ok: true, value: { ...SNAPSHOT, results: [] } };
-							}
 							if (endpoint.endsWith("describe")) {
 								const id = payload && Array.isArray(payload.ids) ? payload.ids[0] : undefined;
 								const detail = DETAILS[id];
@@ -858,8 +782,8 @@ const fakeCtx = {
 									return { ok: false, error: { code: "session-curator/error", message: "找不到这个会话" } };
 								return { ok: true, value: detail };
 							}
-							if (endpoint.endsWith("restore") && failRestore) {
-								return { ok: false, error: { code: "session-curator/error", message: "恢复失败（自检）" } };
+							if (endpoint.endsWith("delete") && failDelete) {
+								return { ok: false, error: { code: "session-curator/error", message: "删除失败（自检）" } };
 							}
 							return { ok: true, value: SNAPSHOT };
 						}
@@ -892,20 +816,20 @@ check(
 	slots.length === 6 &&
 		section !== undefined &&
 		slots.map((entry) => entry.options.id).join(",") ===
-			"session-curator.delete,session-curator.dialog,archived-sessions,session-curator.hover,session-curator.trash,session-curator.toast",
+			"session-curator.delete,session-curator.dialog,archived-sessions,session-curator.hover,session-curator.delete-row,session-curator.toast",
 	slots.map((entry) => `${entry.options.name}:${entry.options.id}`).join(", ")
 );
 check(
 	"the two new sidebar seats are filled (hover card + inline row action)",
 	slotOf("sidebar.session.row.hover", "session-curator.hover") !== undefined &&
-		slotOf("sidebar.workspaces.session.row.action", "session-curator.trash") !== undefined &&
+		slotOf("sidebar.workspaces.session.row.action", "session-curator.delete-row") !== undefined &&
 		slotOf("shell.overlay", "session-curator.toast") !== undefined
 );
 check(
 	"the row action sorts after the official archive (100) / pin (200) entries",
-	slotOf("sidebar.workspaces.session.row.action", "session-curator.trash").options.order > 200 &&
+	slotOf("sidebar.workspaces.session.row.action", "session-curator.delete-row").options.order > 200 &&
 		slotOf("sidebar.session.row.hover", "session-curator.hover").options.order > 10,
-	`row=${slotOf("sidebar.workspaces.session.row.action", "session-curator.trash").options.order} hover=${slotOf("sidebar.session.row.hover", "session-curator.hover").options.order}`
+	`row=${slotOf("sidebar.workspaces.session.row.action", "session-curator.delete-row").options.order} hover=${slotOf("sidebar.session.row.hover", "session-curator.hover").options.order}`
 );
 /** 面板拿到的 `t`：直接用面板注册时交上去的那份中文词典（带 {n} 插值）。 */
 const tPanel = (key, params) => {
@@ -1064,7 +988,7 @@ check(
 		workspaceMenuOf(headers()[1]) !== undefined &&
 		workspaceMenuOf(headers()[1])
 			.props.items.map((item) => item.id)
-			.join(",") === "archive,trash",
+			.join(",") === "archive,delete",
 	partsOf(headers()[1])
 		.map((child) => String(child?.type))
 		.join(",")
@@ -1126,8 +1050,8 @@ check(
 );
 const archivedMenu = menuOfRow("s-1");
 check(
-	"archived rows offer unarchive / pin / move-to-trash plus locate, in that order",
-	archivedMenu.props.items.map((item) => item.id).join(",") === "unarchive,pin,trash,copy-path,reveal",
+	"archived rows offer unarchive / pin / delete plus locate, in that order",
+	archivedMenu.props.items.map((item) => item.id).join(",") === "unarchive,pin,delete,copy-path,reveal",
 	archivedMenu.props.items.map((item) => item.label).join(" · ")
 );
 check(
@@ -1168,12 +1092,12 @@ check(
 	JSON.stringify(hostCalls[hostCalls.length - 1])
 );
 
-// 选"移入回收站" → 不打宿主，改成弹确认框（软删除永远先问）。
+// 选"删除会话" → 不打宿主，改成弹确认框（物理删除永远先问）。
 // 这个待确认请求**故意留着**：下面那条"共享弹窗显示待确认请求"的断言用的就是它。
-menuOfRow("s-2").props.onSelect("trash");
+menuOfRow("s-2").props.onSelect("delete");
 tree = await render(section.component, { t: tPanel });
 check(
-	"selecting move-to-trash asks for confirmation instead of calling the host",
+	"selecting delete asks for confirmation instead of calling the host",
 	hostCalls.length === callsBefore + 1 && menuOfRow("s-2").props.open === false
 );
 
@@ -1219,22 +1143,22 @@ check(
 	JSON.stringify({ color: runningPill()?.props.style.color, title: runningPill()?.props.title })
 );
 check(
-	"a running session cannot be moved to the trash from its ⋯ menu",
+	"a running session cannot be deleted from its ⋯ menu",
 	menuOfRow("s-4")
 		.props.items.map((item) => item.id)
-		.join(",") === "unpin,trash,copy-path,reveal" && menuOfRow("s-4").props.items[1].disabled === true,
+		.join(",") === "unpin,delete,copy-path,reveal" && menuOfRow("s-4").props.items[1].disabled === true,
 	JSON.stringify(menuOfRow("s-4").props.items.map((item) => `${item.id}:${item.disabled}`))
 );
 // 拦第二道：就算有人直接调 `run()`（自检就是这么做的），也不该打宿主。
-const runningTrashCalls = hostCalls.filter((entry) => entry.endpoint.endsWith("trash")).length;
-menuOfRow("s-4").props.onSelect("trash");
+const runningDeleteCalls = hostCalls.filter((entry) => entry.endpoint.endsWith("delete")).length;
+menuOfRow("s-4").props.onSelect("delete");
 tree = await render(section.component, { t: tPanel });
 check(
 	"the disabled item never reaches the host or the dialog",
-	hostCalls.filter((entry) => entry.endpoint.endsWith("trash")).length === runningTrashCalls,
-	`${hostCalls.filter((entry) => entry.endpoint.endsWith("trash")).length - runningTrashCalls} trash call(s)`
+	hostCalls.filter((entry) => entry.endpoint.endsWith("delete")).length === runningDeleteCalls,
+	`${hostCalls.filter((entry) => entry.endpoint.endsWith("delete")).length - runningDeleteCalls} delete call(s)`
 );
-// 上面那次 `onSelect("trash")` 会把一个待确认请求留在共享弹窗里（这正是它的设计：
+// 上面那次 `onSelect("delete")` 会把一个待确认请求留在共享弹窗里（这正是它的设计：
 // 危险动作先问）。它要**留到后面**那条"共享弹窗显示待确认请求"的断言用 —— 这里不清理。
 // 回已归档页签，后面的检查依赖它。
 tabButton("已归档").props.onClick();
@@ -1256,9 +1180,7 @@ check(
 );
 check(
 	"the result is announced through the shared notice, not the panel error line",
-	client.toastStore.get() !== null &&
-		String(client.toastStore.get().title).includes(OPEN_RESULT.path) &&
-		client.toastStore.get().ids.length === 0,
+	client.toastStore.get() !== null && String(client.toastStore.get().message).includes(OPEN_RESULT.path),
 	JSON.stringify(client.toastStore.get())
 );
 client.toastStore.set(null);
@@ -1278,8 +1200,8 @@ check(
 	"a failed reveal falls back to copying the path and explains why",
 	copied.length === copiedBeforeFallback + 1 &&
 		copied[copied.length - 1] === OPEN_RESULT.path &&
-		String(client.toastStore.get()?.title).includes("没有文件管理器"),
-	String(client.toastStore.get()?.title)
+		String(client.toastStore.get()?.message).includes("没有文件管理器"),
+	String(client.toastStore.get()?.message)
 );
 failReveal = false;
 client.toastStore.set(null);
@@ -1309,82 +1231,6 @@ buttonByLabel("分组：平铺").props.onClick();
 tree = await render(section.component, { t: tPanel });
 check("turning grouping back on restores the headers", headers().length === 2, `${headers().length} header(s)`);
 
-// 切到回收站页签：同样按工作区分组（回收站行用 __trash.json 里的 cwd）。
-check(
-	"trash tab button exists",
-	buttonByLabel("回收站") !== undefined,
-	JSON.stringify(
-		collect(tree, [])
-			.filter((node) => node.type === "Button")
-			.map((node) => node.children?.[0])
-	)
-);
-buttonByLabel("回收站").props.onClick();
-tree = await render(section.component, { t: tPanel });
-check(
-	"trash tab groups by the recorded workspace folder too",
-	headers().length === 1 && headers()[0].props.group.title === "BlogPage" && rowsSeen().length === 2,
-	`${headers().length} header(s), ${rowsSeen().length} row(s)`
-);
-check(
-	"trash rows offer restore + permanent delete plus locate",
-	menuOfRow("s-9")
-		.props.items.map((item) => item.id)
-		.join(",") === "restore,purge,copy-path,reveal",
-	menuOfRow("s-9")
-		.props.items.map((item) => item.label)
-		.join(" · ")
-);
-check(
-	"a restorable trash row keeps 恢复 clickable",
-	menuOfRow("s-9").props.items[0].disabled === false && menuOfRow("s-9").props.items[0].label === "恢复",
-	JSON.stringify(menuOfRow("s-9").props.items[0])
-);
-// `restorable: false`（缺 `__trash.json` 的老条目）点了必然报"缺少回收站元数据"：
-// 改成 disabled + 换一句说明，别把注定失败的动作摆成可点的样子。
-check(
-	"a trash row without metadata gets a disabled 恢复 with an explanatory label",
-	menuOfRow("s-10").props.items[0].disabled === true &&
-		menuOfRow("s-10").props.items[0].label === "无法恢复（缺元数据）" &&
-		menuOfRow("s-10").props.items[1].id === "purge" &&
-		menuOfRow("s-10").props.items[1].danger === true,
-	JSON.stringify(menuOfRow("s-10").props.items)
-);
-const callsBeforeDeadRestore = hostCalls.length;
-menuOfRow("s-10").props.onSelect("restore");
-tree = await render(section.component, { t: tPanel });
-check(
-	"selecting that unavailable 恢复 calls neither the host nor the dialog",
-	hostCalls.length === callsBeforeDeadRestore && menuOfRow("s-10").props.open === false,
-	`${hostCalls.length - callsBeforeDeadRestore} host call(s)`
-);
-
-// 批量「恢复」同一套语义：选中的条目里只要有一条带元数据就还能点，全是缺元数据的才禁用。
-const restoreBatch = () => collect(tree, []).find((node) => node.type === "Button" && node.children?.[0] === "恢复");
-const checkboxOf = (sessionId) => draw(rowsSeen().find((node) => node.props.row.sessionId === sessionId)).children[0];
-partsOf(headers()[0])[1].props.onClick();
-tree = await render(section.component, { t: tPanel });
-check(
-	"the trash tab offers 恢复 for the whole selection",
-	restoreBatch() !== undefined && restoreBatch().props.disabled === false,
-	JSON.stringify(restoreBatch()?.props.disabled)
-);
-checkboxOf("s-9").props.onChange();
-tree = await render(section.component, { t: tPanel });
-check(
-	"batch 恢复 turns disabled once every selected entry lacks metadata",
-	restoreBatch().props.disabled === true,
-	JSON.stringify(
-		collect(tree, [])
-			.filter((node) => node.type === "Button")
-			.map((node) => node.children?.[0])
-	)
-);
-checkboxOf("s-10").props.onChange();
-tree = await render(section.component, { t: tPanel });
-check("the trash selection is cleared again for the following checks", !JSON.stringify(tree).includes("已选"));
-check("trash rows keep the same single-⋯ shape", draw(rowsSeen()[0]).children[2].children.length === 1);
-
 // ── 配置页：动作在右上、基础设置、版本号与升级提示 ───────────────────────
 // 面板根节点的第 1 个子节点就是顶部条：左边页签组，右边动作组。
 const headerOf = () => tree.children[0];
@@ -1407,8 +1253,8 @@ const spanWith = (prefix) =>
 	collect(tree, []).find((node) => node.type === "span" && typeof node.children?.[0] === "string" && node.children[0].startsWith(prefix));
 
 check(
-	"the three data tabs stay on the top-left, with 磁盘占用 and 配置 appended",
-	tabButtons().length === 5 && tabLabels() === "已归档 (3) | 已置顶 (1) | 回收站 (2) | 磁盘占用 | 配置",
+	"the two data tabs stay on the top-left, with 磁盘占用 and 配置 appended",
+	tabButtons().length === 4 && tabLabels() === "已归档 (3) | 已置顶 (1) | 磁盘占用 | 配置",
 	tabLabels()
 );
 check(
@@ -1445,17 +1291,17 @@ check(
 	headerOf().children[1] === null && tabLabels().endsWith("配置"),
 	tabLabels()
 );
-// 排序与保留天数改成了**下拉**（`Dropdown` 是 Menu + MenuItemButton），所以分段控件从 4 个降到 2 个。
+// 排序改成了**下拉**（`Dropdown` 是 Menu + MenuItemButton），所以分段控件只剩 2 个。
 check(
 	"the config page renders 4 switches and 2 segmented controls",
 	switchNodes().length === 4 && segmentedNodes().length === 2,
 	`${switchNodes().length} switch(es), ${segmentedNodes().length} segmented`
 );
 check(
-	"the default-tab control offers exactly the three data tabs (never 配置 / 磁盘占用)",
+	"the default-tab control offers exactly the two data tabs (never 配置 / 磁盘占用)",
 	segmentedNodes()[0]
 		.props.options.map((option) => option.value)
-		.join(",") === "archived,pinned,trash",
+		.join(",") === "archived,pinned",
 	segmentedNodes()[0]
 		.props.options.map((option) => option.label)
 		.join(", ")
@@ -1470,7 +1316,7 @@ check(
 	String(segmentedByLabel("分组默认状态")?.props.value)
 );
 
-// ── 两个下拉：排序 + 保留天数（都是 `Menu` 的数据行 + `selectedId`） ────────
+// ── 排序下拉（`Menu` 的数据行 + `selectedId`） ─────────────────────────
 /**
  * 下拉：`Dropdown` 自己也是**组件**（迷你渲染器不递归），所以要先找到它再 `draw` 一次，
  * 拿到的才是里面那个 `Menu`。
@@ -1494,11 +1340,11 @@ const dropdownAnchor = (label) => dropdownMenu(label)?.props?.anchor;
 /** 锚点按钮上的文字（它是 `Button` 的第一个子节点，不是 `props.children`）。 */
 const dropdownLabel = (label) => dropdownAnchor(label)?.children?.[0];
 check(
-	"the order control is a dropdown listing all five orders and showing the current one",
+	"the order control is a dropdown listing all four orders and showing the current one",
 	dropdownByLabel("排序") !== undefined &&
 		dropdownRows("排序")
 			.map((row) => row.label)
-			.join(" | ") === "原顺序 | 标题 | 体积 | 创建时间 | 删除时间" &&
+			.join(" | ") === "原顺序 | 标题 | 体积 | 创建时间" &&
 		dropdownLabel("排序") === "原顺序" &&
 		dropdownMenu("排序").props.open === false,
 	JSON.stringify(dropdownRows("排序").map((row) => row.label))
@@ -1507,14 +1353,8 @@ check(
 //（数据行的 `selectedId`），行上不许再挂 `icon`（`MenuItemButton` 的 icon 在文字**前面**）。
 check(
 	"the current row is marked by Menu's own trailing check (selectedId), never a leading icon",
-	dropdownMenu("排序").props.selectedId === "session-curator-order-host" &&
-		dropdownRows("排序").every((row) => row.icon === undefined) &&
-		dropdownMenu("回收站保留天数").props.selectedId === "session-curator-trash-days-30",
-	JSON.stringify({
-		order: dropdownMenu("排序").props.selectedId,
-		retention: dropdownMenu("回收站保留天数").props.selectedId,
-		icons: dropdownRows("排序").map((row) => row.icon?.type ?? "none")
-	})
+	dropdownMenu("排序").props.selectedId === "session-curator-order-host" && dropdownRows("排序").every((row) => row.icon === undefined),
+	JSON.stringify({ order: dropdownMenu("排序").props.selectedId, icons: dropdownRows("排序").map((row) => row.icon?.type ?? "none") })
 );
 // 点开 → 只开这一个下拉；选一档 → 写设置 + 关列表 + 锚点换文案。
 dropdownAnchor("排序").props.onClick();
@@ -1540,63 +1380,13 @@ check(
 	String(JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).order)
 );
 
-// 保留天数：下拉（3 档）+ 自定义输入框。
-const customDaysInput = () => nodesOf(tree, "Input").find((node) => node.props["aria-label"] === "自定义保留天数");
-check(
-	"the retention control is a dropdown of presets plus a custom-days field",
-	dropdownByLabel("回收站保留天数") !== undefined &&
-		dropdownRows("回收站保留天数")
-			.map((row) => row.label)
-			.join(" | ") === "7 天 | 30 天 | 90 天" &&
-		dropdownLabel("回收站保留天数") === "30 天" &&
-		customDaysInput() !== undefined &&
-		customDaysInput().props.value === "",
-	`rows=${dropdownRows("回收站保留天数")
-		.map((row) => row.label)
-		.join(" | ")} custom=${JSON.stringify(customDaysInput()?.props.value)}`
-);
-// 自定义 45 天：预览要按 45 天重新算（`effectiveTrashDays()` 是唯一的口径）。
-customDaysInput().props.onChange({ target: { value: "45" } });
-tree = await render(section.component, { t: tPanel });
-check(
-	"a custom day count re-previews with that exact number and takes over the anchor label",
-	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDaysCustom === "45" &&
-		hostCalls.some((entry) => entry.endpoint.endsWith("trash-stats") && entry.payload.days === 45) &&
-		dropdownLabel("回收站保留天数") === "自定义" &&
-		JSON.stringify(tree).includes("删除 45 天前的会话"),
-	`custom=${JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDaysCustom}`
-);
-// 非法值：不生效（回落到档位）、输入框标红、清理按钮禁掉。
-customDaysInput().props.onChange({ target: { value: "0" } });
-tree = await render(section.component, { t: tPanel });
-check(
-	"an out-of-range day count is refused instead of silently clamped",
-	client.parseCustomDays("0") === null &&
-		client.effectiveTrashDays({ trashDays: 30, trashDaysCustom: "0" }) === 30 &&
-		customDaysInput().props["aria-invalid"] === true &&
-		customDaysInput().props.style.borderColor === "var(--dsw-alias-state-error-primary)" &&
-		JSON.stringify(tree).includes("删除 30 天前的会话"),
-	JSON.stringify({ invalid: customDaysInput()?.props["aria-invalid"], border: customDaysInput()?.props.style.borderColor })
-);
-// 选档位会把自定义值清掉（否则"选了 7 天却还按 45 天算"是最容易搞混的状态）。
-selectDropdownRow("回收站保留天数", 0);
-tree = await render(section.component, { t: tPanel });
-check(
-	"picking a preset clears the custom value",
-	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDays === 7 &&
-		JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDaysCustom === "" &&
-		customDaysInput().props.value === "" &&
-		dropdownLabel("回收站保留天数") === "7 天",
-	JSON.stringify(JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")))
-);
-
 // ── 磁盘占用：**独立页签**（不再挂在配置页里） ───────────────────────────
 // 迷你渲染器**不递归组件**，所以这一块要像 GroupHeader / SessionRow 那样显式 `draw` 一次：
 // 面板只负责把 `<UsagePanel …>` 挂进那一页，它自己的渲染由这里单独跑。
 const usageNode = () => collect(tree, []).find((node) => node.type === client.UsagePanel);
 /** 每次都要重新取：元素是快照，状态一变就是新的那棵树。 */
 const usageTree = () => draw(usageNode());
-/** 榜单上的动作按钮：归档 / 取消归档（回收站里的与正在跑的都不给按钮）。 */
+/** 榜单上的动作按钮：归档 / 取消归档（正在跑的不给按钮）。 */
 const usageButtons = (label) => collect(usageTree(), []).filter((node) => node.type === "Button" && node.children?.[0] === label);
 const usageArchiveButtons = () => usageButtons("归档");
 const usageUnarchiveButtons = () => usageButtons("取消归档");
@@ -1638,11 +1428,7 @@ check(
 		total: usageNode()?.props.usage?.totalSessions
 	})
 );
-check(
-	"the usage header reports the totals the host sent",
-	usageSpans().includes("共 5 个会话 · 4.1 KB（磁盘上 4 个）"),
-	JSON.stringify(usageSpans())
-);
+check("the usage header reports the totals the host sent", usageSpans().includes("共 5 个会话 · 4.1 KB"), JSON.stringify(usageSpans()));
 check(
 	"the usage view lists the workspace bars, largest and oldest sessions",
 	usageSpans().includes("按工作区") &&
@@ -1655,34 +1441,31 @@ check(
 	JSON.stringify(usageSpans())
 );
 check(
-	"the running badge on a usage row is the blue one, not the danger red",
+	"the running badge on a usage row is the blue one",
 	collect(usageTree(), []).find((node) => node.children?.[0] === "运行中")?.props.style.color ===
-		"var(--dsw-alias-state-business-primary)" &&
-		collect(usageTree(), []).find((node) => node.children?.[0] === "在回收站")?.props.style.color ===
-			"var(--dsw-alias-state-error-primary)",
+		"var(--dsw-alias-state-business-primary)",
 	JSON.stringify(
 		collect(usageTree(), [])
-			.filter((node) => typeof node.children?.[0] === "string" && ["运行中", "在回收站"].includes(node.children[0]))
+			.filter((node) => node.children?.[0] === "运行中")
 			.map((node) => [node.children[0], node.props.style?.color])
 	)
 );
 // 右侧按钮必须跟着行的状态走：已归档还摆着「归档」是幂等的空操作（点了没反应），
-// 运行中的不给「归档」，回收站里的什么都不给。
+// 运行中的不给「归档」。
 check(
 	"the usage row action follows the row state (归档 / 取消归档 / none)",
 	usageSpans().includes("运行中") &&
 		usageSpans().includes("已置顶") &&
-		usageSpans().includes("在回收站") &&
 		usageRowAction("s-5")?.children?.[0] === "归档" &&
 		usageRowAction("s-3")?.children?.[0] === "取消归档" &&
 		usageRowAction("s-1")?.children?.[0] === "取消归档" &&
 		usageRowAction("s-4") === null &&
-		usageRowAction("s-9") === null,
+		usageRowAction("s-9")?.children?.[0] === "归档",
 	JSON.stringify(["s-5", "s-3", "s-1", "s-4", "s-9"].map((id) => usageRowAction(id)?.children?.[0] ?? "none"))
 );
 check(
 	"an archived usage row is badged 已归档 and gets 取消归档 instead of the idempotent 归档",
-	usageSpans().includes("已归档") && usageUnarchiveButtons().length === 2 && usageArchiveButtons().length === 1,
+	usageSpans().includes("已归档") && usageUnarchiveButtons().length === 2 && usageArchiveButtons().length === 2,
 	`${usageArchiveButtons().length} archive / ${usageUnarchiveButtons().length} unarchive button(s)`
 );
 // 点「归档」→ 与列表同一个 `archive` 端点，**完事之后再重拉一次 `usage`**
@@ -1694,7 +1477,7 @@ check(
 	"the usage view archives a session through the shared archive endpoint, then re-pulls the view",
 	hostCalls.length === usageCallsBefore + 2 &&
 		hostCalls[usageCallsBefore].endpoint === "session-curator/archive" &&
-		hostCalls[usageCallsBefore].payload.ids.join(",") === "s-5" &&
+		hostCalls[usageCallsBefore].payload.ids.join(",") === "s-9" &&
 		hostCalls[usageCallsBefore + 1].endpoint.endsWith("usage"),
 	JSON.stringify(hostCalls.slice(usageCallsBefore).map((entry) => entry.endpoint))
 );
@@ -2015,13 +1798,13 @@ check(
 );
 updateResponse = { current: "0.1.0", latest: "0.1.1", outdated: true, checkedAt: 0 };
 
-// ── 侧边栏会话行：hover 卡片 + 行内「移入回收站」+ 撤销 toast ─────────────
+// ── 侧边栏会话行：hover 卡片 + 行内「删除会话」 ───────────────────────────
 // 下面每个块都换组件渲染，所以每块开头先 `resetHooks()`（迷你 React 的 hook 槽位是
 // 按**下标**共用的，不换的话两个组件的 useState 会互相顶掉）。
 const dialogEntry = slotOf("shell.overlay", "session-curator.dialog");
 const toastEntry = slotOf("shell.overlay", "session-curator.toast");
 const hoverEntry = slotOf("sidebar.session.row.hover", "session-curator.hover");
-const actionEntry = slotOf("sidebar.workspaces.session.row.action", "session-curator.trash");
+const actionEntry = slotOf("sidebar.workspaces.session.row.action", "session-curator.delete-row");
 /** 发往 `describe` 的请求数：用来断言缓存 / 并发去重真的省掉了请求。 */
 const describeCalls = () => hostCalls.filter((entry) => entry.endpoint.endsWith("describe")).length;
 /** 收集树里所有 span 的文字（hover 卡片与 toast 的断言都按文本找）。 */
@@ -2030,14 +1813,13 @@ const spanTexts = (node) =>
 		.filter((entry) => entry.type === "span" && typeof entry.children?.[0] === "string")
 		.map((entry) => entry.children[0]);
 
-// 面板那条"⋯ 菜单 → 移入回收站"留下的待确认请求：置顶页签那次操作留下的是 `s-4` 的请求
-//（软删除永远先问一次），而这里断言的是 `s-2` —— 所以先把面板**干净地**渲染回已归档页签
-// （前面几个块换过组件，hook 槽位要清一次），再用它自己的菜单制造一次同样的请求。
-// 断言的是"面板的动作 → 共享弹窗"这条线本身，而不是某个残留状态。
+// 面板那条"⋯ 菜单 → 删除会话"留下的待确认请求：置顶页签那次操作留下的是 `s-4` 的请求
+//（物理删除永远先问一次），而这里断言的是 `s-2` —— 所以先把面板**干净地**渲染回已归档页签
+//（前面几个块换过组件，hook 槽位要清一次），再用它自己的菜单制造一次同样的请求。
 client.dialogStore.set(null);
 resetHooks();
 tree = await render(section.component, { t: tPanel });
-menuOfRow("s-2").props.onSelect("trash");
+menuOfRow("s-2").props.onSelect("delete");
 resetHooks();
 let dialogTree = await render(dialogEntry.component, { t: tPanel });
 check(
@@ -2045,11 +1827,16 @@ check(
 	dialogTree?.type === "Modal" && String(dialogTree.props.description).includes("改毛玻璃"),
 	String(dialogTree?.props.description)
 );
+check(
+	"the dialog spells out that deleting is permanent and points at archiving",
+	String(dialogTree.props.description).includes("无法恢复") && String(dialogTree.props.description).includes("归档"),
+	String(dialogTree?.props.description)
+);
 dialogTree.props.footer.children[0].props.onClick();
 dialogTree = await render(dialogEntry.component, { t: tPanel });
 check(
-	"cancelling it clears the request without ever calling the trash endpoint",
-	dialogTree === null && !hostCalls.some((entry) => entry.endpoint.endsWith("trash"))
+	"cancelling it clears the request without ever calling the delete endpoint",
+	dialogTree === null && !hostCalls.some((entry) => entry.endpoint.endsWith("delete"))
 );
 
 // 1) hover 卡片：只补官方卡片没有的磁盘事实（体积 / 文件数 / 原目录 / 状态）。
@@ -2061,19 +1848,15 @@ check(
 	JSON.stringify(spanTexts(hoverTree))
 );
 check(
-	"a trashed session is badged 在回收站 and shows when it was deleted",
-	spanTexts(hoverTree).includes("在回收站") &&
-		spanTexts(hoverTree).includes("删除于") &&
-		collect(hoverTree, []).find((node) => node.children?.[0] === "在回收站").props.style.color ===
-			"var(--dsw-alias-state-error-primary)",
+	"an ordinary session carries no status badge at all",
+	!spanTexts(hoverTree).includes("已归档") && !spanTexts(hoverTree).includes("已置顶"),
 	JSON.stringify(spanTexts(hoverTree))
 );
 resetHooks();
 hoverTree = await render(hoverEntry.component, { sessionId: "s-1", t: tPanel });
 check(
-	"an archived (on-disk) session is badged 已归档 and keeps the muted pill colour",
+	"an archived session is badged 已归档 and keeps the muted pill colour",
 	spanTexts(hoverTree).includes("已归档") &&
-		!spanTexts(hoverTree).includes("在回收站") &&
 		collect(hoverTree, []).find((node) => node.children?.[0] === "已归档").props.style.color === "var(--dsw-alias-label-secondary)" &&
 		spanTexts(hoverTree).includes("100 B · 1 个文件"),
 	JSON.stringify(spanTexts(hoverTree))
@@ -2104,18 +1887,11 @@ check(
 	describeCalls() === beforeDedupe + 1 && leftRead === rightRead,
 	`${describeCalls() - beforeDedupe} call(s)`
 );
+// 插件自己的写操作（`mutationStore` 自增）立刻让缓存失效。
 client.forgetDetails();
 await client.describeSession("s-9");
 const beforeInvalidate = describeCalls();
-client.showTrashUndo(["s-9"], "旧会话");
-await client.undoTrash();
-check(
-	"undoing a delete restores those ids through the host",
-	hostCalls[hostCalls.length - 1].endpoint === "session-curator/restore" &&
-		hostCalls[hostCalls.length - 1].payload.ids.join(",") === "s-9",
-	JSON.stringify(hostCalls[hostCalls.length - 1])
-);
-check("a successful undo dismisses its own notice", client.toastStore.get() === null);
+client.mutationStore.set(client.mutationStore.get() + 1);
 check(
 	"the plugin's own write drops the cached detail",
 	describeCalls() === beforeInvalidate,
@@ -2124,94 +1900,68 @@ check(
 await client.describeSession("s-9");
 check("so the next hover asks the host again", describeCalls() === beforeInvalidate + 1, `${describeCalls() - beforeInvalidate} call(s)`);
 
-// 3) 撤销 toast：成功 → 文案 + 撤销；失败 → 换文案、撤掉按钮。
+// 3) 纯信息提示（复制路径 / 定位）：一条提示，没有动作按钮。
 resetHooks();
-client.showTrashUndo(["s-1", "s-2"], "修 Header");
+client.showNotice("已复制路径：/tmp/x");
 let toastTree = await render(toastEntry.component, { t: tPanel });
 check(
-	"a successful delete raises a success Toast holding an 撤销 action",
+	"a notice renders as a plain Toast with no actions",
 	toastTree?.type === "Toast" &&
-		toastTree.props.tone === "success" &&
+		toastTree.props.text === "已复制路径：/tmp/x" &&
 		toastTree.props.holdMs === 5000 &&
-		toastTree.props.actions.length === 1 &&
-		toastTree.props.actions[0].label === "撤销",
+		toastTree.props.actions === undefined,
 	String(toastTree?.props.text)
 );
-check(
-	"a multi-selection notice counts sessions instead of naming one",
-	toastTree.props.text === "2 个会话已移入回收站",
-	String(toastTree.props.text)
-);
 const firstToastKey = toastTree.children[0];
-client.showTrashUndo(["s-1"], "修 Header");
+client.showNotice("换一条提示");
 toastTree = await render(toastEntry.component, { t: tPanel });
 check(
 	"a new notice gets a new key, so the Toast restarts its hold",
-	toastTree.children[0] !== firstToastKey && toastTree.props.text === "「修 Header」已移入回收站",
+	toastTree.children[0] !== firstToastKey && toastTree.props.text === "换一条提示",
 	`${String(firstToastKey)} → ${String(toastTree.children[0])}`
 );
-const beforeToastUndo = hostCalls.length;
-toastTree.props.actions[0].onClick();
-await new Promise((resolve) => setTimeout(resolve, 0));
-check(
-	"clicking 撤销 restores exactly the trashed ids and closes the notice",
-	hostCalls.length === beforeToastUndo + 1 && client.toastStore.get() === null,
-	`${hostCalls.length - beforeToastUndo} call(s)`
-);
-failRestore = true;
-client.showTrashUndo(["s-1"], "修 Header");
-toastTree = await render(toastEntry.component, { t: tPanel });
-await client.undoTrash();
-toastTree = await render(toastEntry.component, { t: tPanel });
-check(
-	"a failed undo swaps in the reason and drops the action",
-	String(toastTree.props.text).includes("撤销失败") &&
-		String(toastTree.props.text).includes("恢复失败（自检）") &&
-		toastTree.props.actions === undefined &&
-		toastTree.props.icon.type === "IconWarningOutlineRegular",
-	String(toastTree.props.text)
-);
-failRestore = false;
 client.toastStore.set(null);
+toastTree = await render(toastEntry.component, { t: tPanel });
+check("a dismissed notice unmounts the Toast", toastTree === null, String(toastTree));
 
 // 4) 行内 hover 按钮：形状与官方那个槽位一致（朴素 16×16 图标按钮），点击仍然先确认。
 resetHooks();
 let actionTree = await render(actionEntry.component, { sessionId: "s-1", displayTitle: "修 Header", t: tPanel });
 /** 每次都要重新取：它是快照，hover 之后是新的那棵树。 */
-const trashButton = () => actionTree.props.children;
+const deleteButton = () => actionTree.props.children;
 check(
 	"the inline action is a Tooltip-wrapped plain icon button, like the official ones",
 	actionTree.type === "Tooltip" &&
-		actionTree.props.label === "移入回收站" &&
+		actionTree.props.label === "删除会话" &&
 		actionTree.props.side === "bottom" &&
 		actionTree.props.align === "end" &&
-		trashButton().type === "button" &&
-		trashButton().props.type === "button" &&
-		trashButton().children[0].type === "IconTrashOutlineRegular" &&
-		trashButton().children[0].props.size === 14,
-	`label=${String(actionTree.props.label)} anchor=${String(trashButton().type)}`
+		deleteButton().type === "button" &&
+		deleteButton().props.type === "button" &&
+		deleteButton().children[0].type === "IconTrashOutlineRegular" &&
+		deleteButton().children[0].props.size === 14,
+	`label=${String(actionTree.props.label)} anchor=${String(deleteButton().type)}`
 );
 check(
 	"it matches the official 16x16 transparent geometry inside the 20px row-actions strip",
-	trashButton().props.style.width === "16px" &&
-		trashButton().props.style.height === "16px" &&
-		trashButton().props.style.borderRadius === "var(--dsw-radius-xs)" &&
-		trashButton().props.style.flex === "none" &&
-		trashButton().props.style.padding === 0 &&
-		trashButton().props.style.border === "none" &&
-		trashButton().props.style.cursor === "pointer" &&
-		String(trashButton().props["aria-label"]).includes("修 Header"),
-	JSON.stringify(trashButton().props.style)
+	deleteButton().props.style.width === "16px" &&
+		deleteButton().props.style.height === "16px" &&
+		deleteButton().props.style.borderRadius === "var(--dsw-radius-xs)" &&
+		deleteButton().props.style.flex === "none" &&
+		deleteButton().props.style.padding === 0 &&
+		deleteButton().props.style.border === "none" &&
+		deleteButton().props.style.cursor === "pointer" &&
+		String(deleteButton().props["aria-label"]).includes("修 Header"),
+	JSON.stringify(deleteButton().props.style)
 );
 check(
 	"it paints the danger red and never a hover background",
-	trashButton().props.style.color === "var(--dsw-alias-state-error-primary)" && trashButton().props.style.background === "transparent",
-	JSON.stringify({ color: trashButton().props.style.color, background: trashButton().props.style.background })
+	deleteButton().props.style.color === "var(--dsw-alias-state-error-primary)" && deleteButton().props.style.background === "transparent",
+	JSON.stringify({ color: deleteButton().props.style.color, background: deleteButton().props.style.background })
 );
 // hover：只把同一个红色压深一档（`color-mix`），底、边框、尺寸一律不动。
-trashButton().props.onPointerEnter();
+deleteButton().props.onPointerEnter();
 actionTree = await render(actionEntry.component, { sessionId: "s-1", displayTitle: "修 Header", t: tPanel });
-const hoveredStyle = trashButton().props.style;
+const hoveredStyle = deleteButton().props.style;
 check(
 	"hovering deepens the same red without adding any background",
 	hoveredStyle.color === "color-mix(in srgb, var(--dsw-alias-state-error-primary) 78%, #000)" &&
@@ -2221,35 +1971,44 @@ check(
 		hoveredStyle.height === "16px",
 	JSON.stringify(hoveredStyle)
 );
-trashButton().props.onPointerLeave();
+deleteButton().props.onPointerLeave();
 actionTree = await render(actionEntry.component, { sessionId: "s-1", displayTitle: "修 Header", t: tPanel });
 check(
 	"leaving the button restores the base red",
-	trashButton().props.style.color === "var(--dsw-alias-state-error-primary)",
-	String(trashButton().props.style.color)
+	deleteButton().props.style.color === "var(--dsw-alias-state-error-primary)",
+	String(deleteButton().props.style.color)
 );
-const trashCallsBefore = hostCalls.filter((entry) => entry.endpoint.endsWith("trash")).length;
-trashButton().props.onClick();
+const deleteCallsBefore = hostCalls.filter((entry) => entry.endpoint.endsWith("delete")).length;
+deleteButton().props.onClick();
 resetHooks();
 let confirmTree = await render(dialogEntry.component, { t: tPanel });
 check(
-	"clicking it asks for confirmation instead of trashing straight away",
+	"clicking it asks for confirmation instead of deleting straight away",
 	confirmTree?.type === "Modal" &&
 		String(confirmTree.props.description).includes("修 Header") &&
-		hostCalls.filter((entry) => entry.endpoint.endsWith("trash")).length === trashCallsBefore,
+		String(confirmTree.props.description).includes("归档") &&
+		hostCalls.filter((entry) => entry.endpoint.endsWith("delete")).length === deleteCallsBefore,
 	String(confirmTree?.props.description)
 );
+/** 弹窗正文里那个"我明白"勾选框（`Modal` 的 children 是普通元素树，递归找 input）。 */
+const ackBox = () => collect(confirmTree, []).find((node) => node.type === "input" && node.props.type === "checkbox");
+check(
+	"the delete confirmation stays disabled until the irreversible-action box is ticked",
+	confirmTree.props.footer.children[1].props.disabled === true &&
+		String(confirmTree.props.footer.children[1].children[0]) === "永久删除" &&
+		ackBox() !== undefined &&
+		JSON.stringify(confirmTree).includes("我明白这无法撤销"),
+	String(confirmTree.props.footer.children[1].children[0])
+);
+ackBox().props.onChange({ target: { checked: true } });
+confirmTree = await render(dialogEntry.component, { t: tPanel });
 confirmTree.props.footer.children[1].props.onClick();
 await new Promise((resolve) => setTimeout(resolve, 0));
-const notice = client.toastStore.get();
 check(
-	"confirming trashes that one session and raises the undo notice for it",
-	hostCalls[hostCalls.length - 1].endpoint === "session-curator/trash" &&
-		hostCalls[hostCalls.length - 1].payload.ids.join(",") === "s-1" &&
-		notice !== null &&
-		notice.title === "修 Header" &&
-		notice.ids.join(",") === "s-1",
-	JSON.stringify(notice)
+	"confirming permanently deletes that one session through the delete endpoint",
+	hostCalls[hostCalls.length - 1].endpoint === "session-curator/delete" &&
+		hostCalls[hostCalls.length - 1].payload.ids.join(",") === "s-1",
+	JSON.stringify(hostCalls[hostCalls.length - 1])
 );
 confirmTree = await render(dialogEntry.component, { t: tPanel });
 check(
@@ -2257,93 +2016,23 @@ check(
 	confirmTree === null,
 	confirmTree === null ? undefined : String(confirmTree?.props?.description)
 );
-
-// ── 回收站保留策略：只读预览 + 永远要人工确认（绝无自动清理） ─────────────
-// 这一段放在最后：它要重置 hook 槽位渲染弹窗宿主（`dialogEntry` / `resetHooks` 在这里才在作用域内），
-// 所以前面所有依赖面板状态的断言都必须已经跑完。
+// 删除是物理删除：失败时把原因留在这条弹窗里，而不是关掉它。
+failDelete = true;
+client.dialogStore.set({ kind: "delete", ids: ["s-3"], title: "写博客" });
 resetHooks();
-buttonByLabel("配置").props.onClick();
-tree = await render(section.component, { t: tPanel });
-// 保留策略的控件现在是**下拉 + 自定义输入框**（上面那一段已有专门断言），
-// 这一段继续验"预览 → 确认 → 真删"那条链路。先把档位摆回 30 天（前面把它改成 7 了）。
-selectDropdownRow("回收站保留天数", 1);
-tree = await render(section.component, { t: tPanel });
-const cleanupButton = () => collect(tree, []).find((node) => node.type === "Button" && (node.children?.[0] ?? "").startsWith("删除 "));
-check(
-	"opening the config tab previews the cleanup (count + size) through the read-only endpoint",
-	hostCalls.some((entry) => entry.endpoint.endsWith("trash-stats") && entry.payload.days === 30) &&
-		JSON.stringify(tree).includes("将删除 2 个会话 · 2.0 KB"),
-	String(spanWith("将删除")?.children?.[0])
-);
-check(
-	"the cleanup button names the day count and stays enabled while something is old enough",
-	cleanupButton() !== undefined && cleanupButton().children[0] === "删除 30 天前的会话" && cleanupButton().props.disabled === false,
-	String(cleanupButton()?.children?.[0])
-);
-
-// 改天数 → 立刻重新预览（只读，不删东西）。
-selectDropdownRow("回收站保留天数", 0);
-tree = await render(section.component, { t: tPanel });
-check(
-	"changing the retention days re-previews with the new value and persists it",
-	JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDays === 7 &&
-		hostCalls.filter((entry) => entry.endpoint.endsWith("trash-stats")).some((entry) => entry.payload.days === 7) &&
-		cleanupButton().children[0] === "删除 7 天前的会话",
-	`days=${JSON.parse(globalThis.localStorage.getItem("dsh-session-curator.settings")).trashDays}`
-);
-
-// 一条都不够老 → 预览换成"没有超过 N 天的"，按钮禁掉（点下去只会得到空结果）。
-const statsBeforeEmpty = trashStatsResponse;
-trashStatsResponse = { ...trashStatsResponse, count: 0, bytes: 0 };
-selectDropdownRow("回收站保留天数", 2);
-tree = await render(section.component, { t: tPanel });
-check(
-	"an empty preview disables the cleanup button instead of offering a no-op",
-	JSON.stringify(tree).includes("没有超过 90 天的会话") && cleanupButton().props.disabled === true,
-	`disabled=${cleanupButton()?.props.disabled}`
-);
-trashStatsResponse = statsBeforeEmpty;
-selectDropdownRow("回收站保留天数", 1);
-tree = await render(section.component, { t: tPanel });
-
-// 点清理：**不打宿主**，先弹确认框；确认之后才打 `purge-older-than`，而且只传 days。
-const purgeOldBefore = purgeOldCalls.length;
-cleanupButton().props.onClick();
-resetHooks();
-let purgeOldDialog = await render(dialogEntry.component, { t: tPanel });
-check(
-	"clicking cleanup raises a confirmation dialog carrying the previewed numbers",
-	purgeOldDialog?.type === "Modal" &&
-		String(purgeOldDialog.props.title) === "清理旧会话" &&
-		String(purgeOldDialog.props.description).includes("将永久删除 2 个在 30 天前移入回收站的会话（2.0 KB）") &&
-		purgeOldCalls.length === purgeOldBefore,
-	String(purgeOldDialog?.props.description)
-);
-/** 弹窗正文里那个"我明白"勾选框（`Modal` 的 children 是普通元素树，递归找 input）。 */
-const ackBox = () => collect(purgeOldDialog, []).find((node) => node.type === "input" && node.props.type === "checkbox");
-check(
-	"the confirmation is disabled until the irreversible-action checkbox is ticked",
-	purgeOldDialog.props.footer.children[1].props.disabled === true &&
-		String(purgeOldDialog.props.footer.children[1].children[0]) === "永久删除" &&
-		ackBox() !== undefined &&
-		JSON.stringify(purgeOldDialog).includes("我明白这无法撤销"),
-	String(purgeOldDialog.props.footer.children[1].children[0])
-);
+confirmTree = await render(dialogEntry.component, { t: tPanel });
 ackBox().props.onChange({ target: { checked: true } });
-purgeOldDialog = await render(dialogEntry.component, { t: tPanel });
-purgeOldDialog.props.footer.children[1].props.onClick();
+confirmTree = await render(dialogEntry.component, { t: tPanel });
+confirmTree.props.footer.children[1].props.onClick();
 await new Promise((resolve) => setTimeout(resolve, 0));
+confirmTree = await render(dialogEntry.component, { t: tPanel });
 check(
-	"confirming sends only the day count (the host recomputes the target set)",
-	purgeOldCalls.length === purgeOldBefore + 1 && purgeOldCalls[0].days === 30 && purgeOldCalls[0].ids === undefined,
-	JSON.stringify(purgeOldCalls[0])
+	"a failed delete keeps the dialog open and shows the host reason",
+	confirmTree !== null && JSON.stringify(confirmTree).includes("删除失败（自检）"),
+	JSON.stringify(confirmTree?.props?.description)
 );
-purgeOldDialog = await render(dialogEntry.component, { t: tPanel });
-check(
-	"the dialog closes once the cleanup succeeded",
-	purgeOldDialog === null,
-	purgeOldDialog === null ? undefined : String(purgeOldDialog?.props?.description)
-);
+client.dialogStore.set(null);
+failDelete = false;
 
 // ── 设置页 id：导航栏图标是「按 id 查表」的（外壳的 navIcon()） ──────────
 check(

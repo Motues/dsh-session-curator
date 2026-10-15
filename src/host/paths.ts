@@ -26,22 +26,12 @@ export function dshHomePath(...segments: string[]): string {
 }
 
 /**
- * 回收站根目录：`<DSH_HOME>/storages/session-manager/trash`。
- *
- * 这里的 `session-manager` 是**故意不改的旧名**：插件从 `dsh-session-manager` 改名成
- * `dsh-session-curator` 时，回收站里可能还躺着用户已经删掉的会话（本机就有一个）——
- * 改路径会把它们变成孤儿。数据目录用历史名、其余 id 用新名，是权衡后的结果。
+ * 历史遗留：本插件 0.2.0 之前把"软删除"的会话搬到
+ * `<DSH_HOME>/storages/session-manager/trash`（目录名 `session-manager` 是更早的包名）。
+ * 回收站功能已在 0.3.0 移除，删除改成物理删除，所以插件**不再读写**那个目录：
+ * 里面可能还有用户当年软删除的会话，插件不主动迁移也不删除它们；需要时人工把
+ * `trash/<sessionId>/` 搬回 `sessions/<slug>/<sessionId>/` 即可。
  */
-export const TRASH_SUBPATH = ["storages", "session-manager", "trash"] as const;
-/** 回收站条目的元数据：原 slug / cwd / 标题 / 删除时间 / 删除前是否已归档。 */
-export const META_FILE = "__trash.json";
-/** 从投影缓存搬进来的那份文件（恢复时要搬回原位）。 */
-export const PROJ_FILE = "__projcache.json";
-
-export function trashRoot(): string {
-	return dshHomePath(...TRASH_SUBPATH);
-}
-
 export function sessionsRoot(): string {
 	return dshHomePath("sessions");
 }

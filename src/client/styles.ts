@@ -75,15 +75,6 @@ export const S = {
 		background: "var(--dsw-alias-interactive-bg-active)",
 		flex: "0 0 auto"
 	},
-	badgeDanger: {
-		color: "var(--dsw-alias-state-error-primary)",
-		fontSize: "10px",
-		lineHeight: "16px",
-		padding: "0 6px",
-		borderRadius: "8px",
-		background: "var(--dsw-alias-interactive-bg-active)",
-		flex: "0 0 auto"
-	},
 	/** 「运行中」：同款胶囊，但用业务蓝表示"它是活的"，不是危险。 */
 	badgeRunning: {
 		color: "var(--dsw-alias-state-business-primary)",
@@ -229,11 +220,6 @@ export const S = {
 	/** 下拉锚点：文字 + 双向箭头图标，别被挤窄（长标签在按钮里折行是这个仓库踩过的坑）。 */
 	dropdownAnchor: { flex: "0 0 auto" },
 	dropdownButton: { flex: "0 0 auto", whiteSpace: "nowrap" },
-	/** 保留策略那一格：档位下拉 + 自定义天数输入框。 */
-	retentionDays: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" },
-	customDaysInput: { width: "88px", flex: "0 0 auto" },
-	/** 天数非法时只把边框标红，不动尺寸（否则整行会跳一下）。 */
-	customDaysInvalid: { borderColor: "var(--dsw-alias-state-error-primary)" },
 	configFoot: {
 		display: "flex",
 		alignItems: "center",
@@ -300,18 +286,9 @@ export const S = {
 		background: "var(--dsw-alias-interactive-bg-active)",
 		flex: "0 0 auto"
 	},
-	hoverBadgeDanger: {
-		color: "var(--dsw-alias-state-error-primary)",
-		fontSize: "10px",
-		lineHeight: "16px",
-		padding: "0 6px",
-		borderRadius: "8px",
-		background: "var(--dsw-alias-interactive-bg-active)",
-		flex: "0 0 auto"
-	},
 	/**
-	 * 侧边栏会话行 hover 时那个「移入回收站」图标按钮（见
-	 * `components/trash-row-button.ts`）：16×16 的朴素按钮，**两种状态都没有底色**，
+	 * 侧边栏会话行 hover 时那个「删除会话」图标按钮（见
+	 * `components/delete-row-button.ts`）：16×16 的朴素按钮，**两种状态都没有底色**，
 	 * 只有前景色变深一档。
 	 *
 	 * `color-mix` 是 DSH 自己的产物里就在用的写法（例如 ui-deliverables 的

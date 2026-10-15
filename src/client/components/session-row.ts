@@ -34,8 +34,6 @@ export interface SessionRowProps {
 	/** 平铺时才显示文件夹（分组时它已经在组标题上了）。 */
 	showCwd?: boolean;
 	showMeta?: boolean;
-	/** 回收站里显示删除时间，归档 / 置顶里显示创建时间。 */
-	showDeletedAt?: boolean;
 	checked: boolean;
 	onToggle(): void;
 	menu: RowMenu;
@@ -54,7 +52,7 @@ export function SessionRow(props: SessionRowProps): React.ReactElement {
 		if (row.bytes) meta.push(formatBytes(row.bytes));
 		if (row.files) meta.push(text(t, "files", { n: row.files }));
 	}
-	const time = props.showDeletedAt ? formatTime(row.deletedAt) : formatTime(row.createdAt);
+	const time = formatTime(row.createdAt);
 	if (time !== "") meta.push(time);
 
 	const menu = props.menu;
