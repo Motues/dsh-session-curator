@@ -14,14 +14,16 @@
  * 插件 fiber 直接 `failed`、一条路由都没挂上，客户端每个 POST 落到 SPA 静态兜底，
  * 被回 **HTTP 405** —— 就是 `transport failure for /session-manager/trash: HTTP 405`。
  *
- * 本脚本从 `app.asar` 里抽出真实的 `@deepseek-ai/cordis` + `@deepseek-ai/cosmokit`，
- * 用**逐字照抄**的 Connection（`rpc` / `fetch` / `createSharedFetchHandler` /
- * `endpointFromPath` / `assertChannel` / `assertFetchRoute`）搭出同样的兄弟拓扑，然后：
+ * 本脚本从 `app.asar` 里抽出真实的 `@deepseek-ai/cordis` + `@deepseek-ai/cosmokit`
+ * （外加 app-boot 判版本用的真 `semver`），用**逐字照抄**的 Connection
+ * （`rpc` / `fetch` / `createSharedFetchHandler` / `endpointFromPath` / `assertChannel` /
+ * `assertFetchRoute`）搭出同样的兄弟拓扑，然后：
  *   1. 载入本插件的宿主半区，断言 fiber 变 **ACTIVE**（FAILED 直接判失败）；
- *   2. 断言 13 条 `/api/session-curator/*` 精确路由都登记上了；
+ *   2. 断言 10 条 `/api/session-curator/*` 精确路由都登记上了；
  *   3. 用真 `Request` 走一遍共享处理器（等价于宿主 `/api` 栅栏之后的路径），要 200 + 合法信封；
  *   4. 登记一条"永远不该被碰到"的 webServer —— 谁把实现改回 `rpc.handle()` 就会撞上它；
- *   5. dispose 插件，断言 13 条路由全部释放。
+ *   5. dispose 插件，断言 10 条路由全部释放；
+ *   6. 断言 `engines.dsh` **认得这个正在跑的版本**（见下面的"兼容闸"：0.3.0 就是栽在这上面）。
  *
  * 用法：`node scripts/activation.mjs`
  *   找不到 `app.asar` 时打印 SKIP 并以 0 退出；可用 `$env:DSH_APP_ASAR` 指定路径。
@@ -72,26 +74,56 @@ async function readArchive(path) {
 	};
 }
 
-/** 把运行时的 cordis + cosmokit 抽到一个临时 node_modules 里（每次覆盖，避免陈旧）。 */
-async function extractRuntime(archivePath) {
-	const archive = await readArchive(archivePath);
+/** 把运行时的 cordis + cosmokit（外加 app-boot 判 `engines.dsh` 用的 semver）抽到一个临时 node_modules 里（每次覆盖，避免陈旧）。 */
+async function extractRuntime(archive) {
 	const root = join(tmpdir(), "dsh-session-curator-activation");
 	const modules = join(root, "node_modules");
 	await rm(modules, { recursive: true, force: true });
+	/** 落一个文件（自动建目录）。 */
+	const copy = async (relative, bytes) => {
+		const target = join(modules, relative);
+		await mkdir(dirname(target), { recursive: true });
+		await writeFile(target, bytes);
+	};
 	let extracted = 0;
+	let semverFiles = 0;
 	for (const file of archive.files) {
 		const match = /^dsh\/node_modules\/(@deepseek-ai\/(?:cordis|cosmokit))(\/.*)?$/.exec(file.path);
-		if (match === null) continue;
-		const [, packageName, rest = ""] = match;
-		const wanted = rest === "" || rest === "/package.json" || rest.startsWith("/lib/");
-		if (!wanted) continue;
-		const target = join(modules, packageName, rest.replace(/^\//, ""));
-		await mkdir(dirname(target), { recursive: true });
-		await writeFile(target, archive.read(file));
-		extracted += 1;
+		if (match !== null) {
+			const [, packageName, rest = ""] = match;
+			if (rest !== "" && rest !== "/package.json" && !rest.startsWith("/lib/")) continue;
+			await copy(join(packageName, rest.replace(/^\//, "")), archive.read(file));
+			extracted += 1;
+			continue;
+		}
+		// semver 也抽一份真的：`engines.dsh` 这道闸就是 app-boot 用它判的，
+		// 自己写个半吊子版本比较只会把"闸坏了"伪装成"通过"。
+		if (file.path.startsWith("dsh/node_modules/semver/")) {
+			await copy(file.path.slice("dsh/node_modules/".length), archive.read(file));
+			semverFiles += 1;
+		}
 	}
 	if (extracted === 0) throw new Error("app.asar 里没有找到 @deepseek-ai/cordis —— 布局变了？");
-	return join(modules, "@deepseek-ai/cordis/lib/index.js");
+	if (semverFiles === 0) throw new Error("app.asar 里没有找到 semver —— 布局变了？");
+	return {
+		cordisEntry: join(modules, "@deepseek-ai/cordis/lib/index.js"),
+		semver: createRequire(import.meta.url)(join(modules, "semver"))
+	};
+}
+
+/**
+ * 正在跑的 DSH 版本。
+ *
+ * 注意读的是 **`dsh-app-boot` 自己的 package.json**：`getDshRuntimeVersion()` 就是这么做的
+ *（`new URL("../package.json", import.meta.url)`），所以这个数才是 `engines.dsh` 被比对的那一边。
+ */
+function runtimeVersionOf(archive) {
+	const file = archive.files.find((entry) => entry.path === "dsh/node_modules/@deepseek-ai/dsh-app-boot/package.json");
+	if (file === undefined) throw new Error("app.asar 里没有 dsh-app-boot 的 package.json —— 布局变了？");
+	const manifest = JSON.parse(archive.read(file).toString("utf8"));
+	if (typeof manifest.version !== "string" || manifest.version.trim() === "")
+		throw new Error("dsh-app-boot 的 package.json 没有 version —— 布局变了？");
+	return manifest.version;
 }
 
 // ── 逐字照抄 @deepseek-ai/dsh-client-connection 的判定与注册代码 ─────────
@@ -141,8 +173,10 @@ if (archivePath === undefined) {
 	process.exit(0);
 }
 
-console.log(`runtime: ${archivePath}`);
-const cordisEntry = await extractRuntime(archivePath);
+const archive = await readArchive(archivePath);
+const runtimeVersion = runtimeVersionOf(archive);
+console.log(`runtime: ${archivePath} (dsh ${runtimeVersion})`);
+const { cordisEntry, semver } = await extractRuntime(archive);
 const { Context, Service } = await import(pathToFileURL(cordisEntry).href);
 
 /** 故意抛错：这个插件不该再碰 webServer（老实现才会）。 */
@@ -372,6 +406,29 @@ try {
 }
 if (manifestPath !== undefined) {
 	check("package.json is reachable through its own exports map", true);
+
+	/**
+	 * 兼容闸：`engines.dsh` 认得**正在跑的**这个 DSH 吗。
+	 *
+	 * 这是 0.3.0 在 dsh 0.2.1-rc.2 上翻车的**唯一**原因 —— profile startup 读到
+	 *
+	 *     Plugin dsh-session-curator@0.3.0 is incompatible with dsh 0.2.1-rc.2:
+	 *     requirements {"engines.dsh":">=0.2.0-rc.2 <0.2.1-0"}
+	 *
+	 * 就把整条 entry 拒之门外（宿主半区与客户端半区一起消失），界面上看不出任何插件痕迹：
+	 * 插件管理页只是不挂它，`cordis_inspect` 里查不到，槽位里也没有我们的贡献。
+	 * 判据逐字照抄 `dsh-app-boot` 的 `satisfies()`（`engines.dsh` 存在时它一票定生死，
+	 * 且 `includePrerelease`）—— 用抽出来的**真 semver** 算，不自己写版本比较。
+	 */
+	const enginesDsh = manifest.engines?.dsh;
+	check(
+		"engines.dsh admits the DSH runtime this activation just ran against",
+		typeof enginesDsh === "string" &&
+			enginesDsh.trim() !== "" &&
+			semver.satisfies(runtimeVersion, enginesDsh, { includePrerelease: true }),
+		`engines.dsh=${JSON.stringify(enginesDsh)} dsh=${runtimeVersion}`
+	);
+
 	check(
 		"the manifest exports locale JSON for the metadata reader",
 		(() => {

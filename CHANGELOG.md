@@ -7,6 +7,29 @@
 > `scripts/release.mjs` 会按 `## [<版本>]` 这个标题格式取出对应小节，作为 GitHub Release 的正文 ——
 > 发版时把 `Unreleased` 改成 `## [X.Y.Z] - YYYY-MM-DD` 再提交即可。
 
+## [0.3.1] - 2026-10-17
+
+### 修复
+
+- **适配 DSH 0.2.1（`0.2.1-rc.2`）**：DSH 把 `engines.dsh` 当成硬闸 —— 插件声明的范围不认当前运行时，
+  profile 启动就会**整条拒绝**（宿主半区与客户端半区一起消失，界面上看不出任何插件痕迹，
+  只在插件管理日志里留一句 `Plugin dsh-session-curator@0.3.0 is incompatible with dsh 0.2.1-rc.2`）。
+  0.3.0 声明的 `>=0.2.0-rc.2 <0.2.1-0` 恰好把 `0.2.1-rc.2` 挡在门外，所以升级 DSH 后插件就不见了。
+  这次把范围放宽到 `>=0.2.0-rc.2 <0.2.2-0`。**插件代码本身不需要改动**：逐项比对过 0.2.0-rc.2 与
+  0.2.1-rc.2 两边我们真正依赖的那点 API 面（`workspaceRegistry` 的全部方法与属性、
+  `connection.fetch` 的注册与共享处理器、五个槽位的名字 / 注册项 / 传进来的 props、
+  `dsh-client-ui-primitives` 用到的 24 个导出、客户端模块 loader 的 `__ModuleLoader__.load` 契约、
+  设置外壳的导航图标表、app-boot 的 `engines` / 图标 / locale 读取规则、会话目录与投影缓存路径、
+  `workspace/session-activity` 瀑布），全部一致。
+
+### 内部
+
+- `scripts/activation.mjs` 新增**兼容闸**：从本机 `app.asar` 读出正在跑的 DSH 版本
+  （`dsh-app-boot` 自己的 `package.json`，正是 app-boot 比对时用的那一边），用抽出来的**真 semver**
+  演一遍 `dsh-app-boot` 的 `satisfies()`，断言 `engines.dsh` 认得它。用 0.3.0 的旧范围跑会红：
+  `FAIL engines.dsh admits the DSH runtime this activation just ran against`。
+  以后升级 DSH 只需 `node scripts/activation.mjs`，不必等"装上去才发现插件不见了"。
+
 ## [0.3.0] - 2026-10-15
 
 ### 移除

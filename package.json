@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-curator",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DeepSeek Harness plugin: permanently delete sessions and manage archived/pinned ones, grouped by their original workspace folder. | DSH 插件：永久删除会话，并按原来的工作区文件夹管理已归档 / 已置顶会话。",
   "type": "module",
   "main": "lib/index.js",
@@ -53,7 +53,7 @@
   },
   "engines": {
     "node": ">=20",
-    "dsh": ">=0.2.0-rc.2 <0.2.1-0"
+    "dsh": ">=0.2.0-rc.2 <0.2.2-0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
